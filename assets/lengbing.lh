@@ -1,0 +1,198 @@
+{
+  "_$ver": 1,
+  "_$id": "bbuzasr9",
+  "_$type": "Sprite",
+  "name": "Sprite",
+  "width": 750,
+  "height": 1334,
+  "_$child": [
+    {
+      "_$id": "d370g257",
+      "_$type": "GPanel",
+      "name": "panel",
+      "width": 750,
+      "height": 1334,
+      "background": {
+        "_$type": "DrawRectCmd",
+        "fillColor": "#e89e9e"
+      },
+      "_$child": [
+        {
+          "_$id": "ttixm313",
+          "_$type": "GBox",
+          "name": "box_4",
+          "x": 40,
+          "y": 660,
+          "width": 300,
+          "height": 300,
+          "background": {
+            "_$type": "DrawRectCmd",
+            "fillColor": "#9e5656"
+          },
+          "_$child": [
+            {
+              "_$id": "p8kshlgj",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 300,
+              "height": 300,
+              "text": "弩",
+              "fontSize": 90,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2
+            }
+          ]
+        },
+        {
+          "_$id": "bv87b3bo",
+          "_$type": "GBox",
+          "name": "box_2",
+          "x": 40,
+          "y": 350,
+          "width": 300,
+          "height": 300,
+          "background": {
+            "_$type": "DrawRectCmd",
+            "fillColor": "#9e5656"
+          },
+          "_$child": [
+            {
+              "_$id": "zk56sl3s",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 300,
+              "height": 300,
+              "text": "长柄",
+              "fontSize": 90,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2
+            }
+          ]
+        },
+        {
+          "_$id": "ab3jd00h",
+          "_$type": "GBox",
+          "name": "box_1",
+          "x": 400,
+          "y": 40,
+          "width": 300,
+          "height": 300,
+          "background": {
+            "_$type": "DrawRectCmd",
+            "fillColor": "#9e5656"
+          },
+          "_$child": [
+            {
+              "_$id": "5mpidj5k",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 300,
+              "height": 300,
+              "text": "中柄",
+              "fontSize": 90,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2
+            }
+          ]
+        },
+        {
+          "_$id": "420dfi0v",
+          "_$type": "GBox",
+          "name": "box",
+          "x": 40,
+          "y": 40,
+          "width": 300,
+          "height": 300,
+          "background": {
+            "_$type": "DrawRectCmd",
+            "fillColor": "#9e5656"
+          },
+          "_$child": [
+            {
+              "_$id": "slnzqfgi",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 300,
+              "height": 300,
+              "text": "短柄",
+              "fontSize": 90,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2
+            }
+          ]
+        },
+        {
+          "_$id": "v6z0j0f9",
+          "_$type": "GBox",
+          "name": "box_3",
+          "x": 400,
+          "y": 350,
+          "width": 300,
+          "height": 300,
+          "background": {
+            "_$type": "DrawRectCmd",
+            "fillColor": "#9e5656"
+          },
+          "_$child": [
+            {
+              "_$id": "3u86z3hb",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 300,
+              "height": 300,
+              "text": "弓",
+              "fontSize": 90,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2
+            }
+          ]
+        },
+        {
+          "_$id": "axjd0h0n",
+          "_$type": "GBox",
+          "name": "box_5",
+          "x": 400,
+          "y": 660,
+          "width": 300,
+          "height": 300,
+          "background": {
+            "_$type": "DrawRectCmd",
+            "fillColor": "#9e5656"
+          },
+          "_$comp": [
+            {
+              "_$type": "62e8915d-ba31-4558-a5f3-9e6cc70cdd1f",
+              "scriptPath": "../src/Navigation/OpenPanel.ts",
+              "targetPrefab": "gaizhaungtai.lh"
+            }
+          ],
+          "_$child": [
+            {
+              "_$id": "jeoy0m95",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 300,
+              "height": 300,
+              "text": "返回",
+              "fontSize": 90,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

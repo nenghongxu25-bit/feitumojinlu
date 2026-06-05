@@ -1,0 +1,12 @@
+{
+  "State": 0,
+  "UserLoginWay": "WechatOrAli",
+  "Festivals": [
+    {
+      "TypeOfActivity": "TenCoupon",
+      "StartDate": "2022-01-01",
+      "EndDate": "2026-01-01",
+      "State": 1
+    }
+  ]
+}

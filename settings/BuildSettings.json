@@ -1,0 +1,16 @@
+{
+  "name": "LayaProject1",
+  "startupScene": "TestMap.ls",
+  "android": {
+    "targetArchitectures": {
+      "ARMv7": false,
+      "ARM64": true,
+      "x86": false,
+      "x86-64": false
+    },
+    "exportFormat": "APK"
+  },
+  "bytedancegame": {
+    "appid": "tt0f6879d5910f180402"
+  }
+}

@@ -1,0 +1,497 @@
+$ findstr /n "class Prefab" engine\types\LayaAir.d.ts
+[exit 0]
+6: * The Laya class refers to some commonly used global objects, such as Laya.stage: stage, Laya.timer: time manager, Laya.loader: loading manager. Pay attention to case when using.
+12:declare class Laya {
+42:     * @en Reference to the Render class.
+128: * @en Laya3D class is used to initialize 3D settings.
+131:declare class Laya3D {
+157:    class Config {
+308:     * @en Config3D class is used to create 3D initialization configuration.
+312:    class Config3D {
+415:         * Other object types can directly use the class name, but note that the class must use the regClass decorator. Enum types are also supported. Enum types do not need regClass.
+425:         * @en The initial value of the property in the prototype. This value is also used for comparison during serialization, so if they are the same, this property will not be serialized. It must be ensured that the value set here is the initial value of the variable in the class.
+656:         * @en Applicable to object type properties. When creating an object, you can select a type from a dropdown menu. If explicitly set to null, the menu is disabled. By default, a menu for creating the base class is displayed.
+733:        forceWriteInPrefabRoot?: boolean;
+740:         * @en Indicates that the property is not displayed in the property table of derived classes
+830:         * @en Control for editing instances of this class.
+862:     * @en Register a class so it can be automatically saved and loaded by the serialization system.
+863:     * @param assetId The asset ID for the class.
+869:     * @en Set additional information for a class type.
+870:     * @param info Additional information for the class type.
+874:    function classInfo(info?: Partial<FTypeDescriptor>): any;
+912:     * @en The AnimationPlayer class is used for animation players.
+923:    class AnimationPlayer extends EventDispatcher {
+1115:     * @en The AnimationTemplate class is used for animation template resources.
+1119:    class AnimationTemplet extends Resource {
+1297:     * @en The `Bone` class , used for skeletal animations.
+1300:    class Bone {
+1423:     * @en The `BoneSlot` class represents a slot in a skeletal animation that can display different skins or attachments.
+1426:    class BoneSlot {
+1605:    class MeshData {
+1653:    class SkinMeshForGraphic extends MeshData {
+1682:    class EventData {
+1727:    class Skeleton extends Sprite {
+2063:    class SkinSlotDisplayData {
+2153:    class SlotData {
+2173:     * @en Animation template class
+2176:    class Templet extends AnimationTemplet {
+2368:     * @en The `Transform` class represents a 2D transformation matrix, used to apply rotations, scaling, skewing, and translation to objects.
+2371:    class Transform {
+2449:    class KeyFramesContent {
+2499:    class MovieClip extends Sprite {
+2657:    class Bridge3DCamera extends Camera {
+2702:     * This class has NO runtime references or methods.
+2704:    class Bridge3DData {
+2743:     * @class Bridge3DScene3D
+2746:    class Bridge3DScene3D extends Scene3D {
+2839:     * This is an internal class held by Scene._bridge3DInternal, NOT serialized.
+2843:    class Bridge3DSceneInternal implements IBridge3DSceneInternal {
+2911:     * @class Bridge3DSprite
+2914:    class Bridge3DSprite extends Sprite {
+3101:    class Bridge3DContext {
+3346:     * @class Bridge3DRenderElement
+3348:    class Bridge3DRenderElement implements IBridgeRenderElement {
+3454:    class RTBridge3DContext {
+3506:    class RTBridge3DRenderElement implements IBridgeRenderElement {
+3553:    class RTBridge3DRenderProcess implements IBridge3DRenderProcess {
+3596:    class WebBridge3DRenderProcess implements IBridge3DRenderProcess {
+3674:    class Bridge3DCoordinate {
+3780:    class Animation2DCondition {
+3798:     * @en Animation2DEvent class is used to implement animation events.
+3801:    class Animation2DEvent {
+3827:    class Animation2DParm {
+3836:    class AnimationClip2D extends Resource {
+3889:    class AnimationClip2DParse01 {
+3896:    class Animator2D extends Animator2DBase {
+4048:    class AnimatorClip2D extends Animator2DBase {
+4117:    class AnimatorController2D extends Resource {
+4129:    class AnimatorControllerLayer2D implements IClone {
+4328:     * @en Animation controller parsing and processing utility class.
+4331:    class AnimatorControllerParse {
+4350:    class AnimatorPlayState2D {
+4373:         * @en Constructor method of AnimatorPlayState2D class.
+4379:     * @en The Animator class is used to create animation components.
+4382:    class AnimatorState2D extends EventDispatcher implements IClone {
+4519:     * @en The AnimatorStateScript class is used as the parent class for animation state scripts. This class is abstract and does not allow instances.
+4522:    class AnimatorState2DScript {
+4560:    class AnimatorStateCondition {
+4609:     * @en Numerical condition class. Used to handle conditions based on numerical comparisons.
+4612:    class AnimatorStateNumberCondition extends AnimatorStateCondition {
+4641:     * @en Boolean conditional class. Used to handle Boolean based conditions.
+4644:    class AnimatorStateBoolCondition extends AnimatorStateCondition {
+4666:     * @en Trigger condition class. Used to handle trigger type conditions.
+4669:    class AnimatorStateTriggerCondition extends AnimatorStateCondition {
+4687:    class AnimatorTransition2D {
+4781:     * @en The Component class is used to create the base class for components.
+4783:     * @blueprintable @blueprintableSubclasses
+4785:    class Component {
+4973:     * @en Core classes for managing and driving the lifecycle of components
+4976:    class ComponentDriver {
+5027:    class FrameAnimation extends Component {
+5236:    class Keyframe2D implements IClone {
+5267:    class KeyframeNode2D {
+5319:     * @en A class used to manage 2D keyframe nodes list.
+5322:    class KeyframeNodeList2D {
+5350:     * @en The Script class is used to create the parent class of a script, which is an abstract class and does not allow instances.
+5354:    class Script extends Component {
+5561:    class Widget extends Component {
+5643:    class Const {
+5650:    class NodeFlags {
+5673:     * @en HideFlags is a class that defines the flags used to control the visibility and saving behavior of objects in the editor.
+5676:    class HideFlags {
+5709:     * @en The AnimationClip class is used for animation clip resources.
+5712:    class AnimationClip extends Resource {
+5782:     * @en The AnimationEvent class is used to implement animation events.
+5785:    class AnimationEvent {
+5807:     * @en The AnimatorStateScript class is the base class for animation state scripts. This is an abstract class and cannot be instantiated.
+5810:    class AnimatorStateScript {
+5846:     * @en The KeyframeNode class is used for animation keyframes.
+5849:    class KeyframeNode {
+5897:     * @en The KeyframeNodeList class is used to create a queue of KeyframeNode nodes.
+5900:    class KeyframeNodeList {
+5936:     * @en The `Animator` class is used to create 3D animation components.
+5939:    class Animator extends Component {
+6177:    class AnimatorController extends Resource {
+6212:     * @en The `AnimatorControllerLayer` class is used to create animation controller layers.
+6215:    class AnimatorControllerLayer implements IClone {
+6334:     * @en The AnimatorPlayState class is used to create animation play state information.
+6337:    class AnimatorPlayState {
+6368:     * @en Animator resource class for handling animation-related resources.
+6371:    class AnimatorResource {
+6383:     * @en The AnimatorState class is used to create animation states.
+6386:    class AnimatorState extends EventDispatcher implements IClone {
+6518:     * @en The AnimatorTransition class represents a transition between two AnimatorStates.
+6521:    class AnimatorTransition {
+6610:    class AvatarMask {
+6679:    class HLOD extends Component {
+6717:     * @en a batched mesh for hierarchical level of detail (HLOD) in 3D rendering. This class optimizes rendering performance by combining multiple sub-meshes into a single rendering unit, reducing draw calls.
+6720:    class HLODBatchMesh extends GeometryElement {
+6746:     * @en Handles the rendering of a hierarchical level of detail (HLOD) element. This class is responsible for managing LODs for objects to achieve better performance by rendering simpler meshes when objects are further from the camera.
+6749:    class HLODRender extends BaseRender {
+6806:    class HLODConfig {
+6814:    class HLODBatchSubMesh {
+6822:    class HLODElement {
+6856:    class HLODResourceGroup {
+6893:     * @en The `LODInfo` class describes Level of Detail (LOD) data.
+6896:    class LODInfo {
+6937:     * @en The `LODGroup` class is used to build LOD components.
+6940:    class LODGroup extends Component {
+7027:    class StaticBatchMesh {
+7063:     * @en StaticBatchMeshRender class, extends BaseRender for static batch mesh rendering.
+7067:    class StaticBatchMeshRender extends BaseRender {
+7150:    class StaticBatchSubInfo {
+7181:    class StaticBatchSubMesh extends GeometryElement {
+7232:     * @en StaticMeshMergeInfo class represents information for merging static meshes.
+7235:    class StaticMeshMergeInfo {
+7300:     * @en The `VolumeManager` class is used to manage volume components.
+7324:    class ReflectionProbe extends Volume {
+7424:     * @en The `ReflectionProbeManager` class is used for managing reflection probes.
+7427:    class ReflectionProbeManager implements IVolumeManager {
+7429:         * @en The constructor of the `ReflectionProbeManager` class.
+7472:    class volumeIntersectInfo {
+7488:    class Volume extends Component {
+7539:     * @en The `VolumeManager` class is used to manage volume components in a scene.
+7542:    class VolumeManager implements IVolumeManager {
+7615:     * @en The VolumetricGI class represents volumetric global illumination in the scene.
+7618:    class VolumetricGI extends Volume {
+7703:     * @en The `BaseCamera` class is used to create the parent class of cameras.
+7706:    class BaseCamera extends Sprite3D {
+7961:     * @en The Camera class is used to create cameras.
+7964:    class Camera extends BaseCamera {
+8342:     * @en The `GeometryElement` class is used to implement geometric elements. This class is abstract.
+8345:    class GeometryElement {
+8434:     * @en The AreaLightCom class is used to create area lights.
+8437:    class AreaLightCom extends Light {
+8493:    class DirectionLightCom extends Light {
+8549:     * @en LightSprite is the base class for creating light sources.
+8552:    class Light extends Component {
+8643:     * @en The `LightQueue` class manages a queue of lights.
+8646:    class LightQueue<T extends Light> {
+8680:    class LightSprite extends Sprite3D {
+8748:     * @en The `PointLightCom` class represents a point light source in the scene.
+8751:    class PointLightCom extends Light {
+8831:     * @en The `SpotLightCom` class is used to create a spotlight.
+8834:    class SpotLightCom extends Light {
+8869:     * @en The BlinnPhongMaterial class is used to implement Blinn-Phong materials.
+8872:    class BlinnPhongMaterial extends Material {
+9025:     * @en The AffectMaterial class is used to implement Mesh effect materials.
+9028:    class EffectMaterial extends Material {
+9108:     * @en The parent class of PBR material, which is an abstract class.
+9111:    class PBRMaterial extends Material {
+9341:     * @en The PBRStandardMaterial class is used to implement PBR materials.
+9344:    class PBRStandardMaterial extends PBRMaterial {
+9383:     * @en The SkyBoxMaterial class is used to implement the SkyBoxMaterial material.
+9386:    class SkyBoxMaterial extends Material {
+9435:     * @en The SkyPanoramicMaterial class is used to implement SkyPanoramicMaterial material.
+9438:    class SkyPanoramicMaterial extends Material {
+9476:     * @en The SkyProceduralMaterial class is used to implement the SkyProceduralMaterial material.
+9479:    class SkyProceduralMaterial extends Material {
+9554:     * @en The UnlitMaterial class is used to implement materials that are not affected by lighting.
+9557:    class UnlitMaterial extends Material {
+9635:     * @en The `MeshFilter` class is used to create mesh filters.
+9638:    class MeshFilter extends Component {
+9648:     * @en The `MeshRenderer` class is used for mesh rendering.
+9651:    class MeshRenderer extends BaseRender {
+9718:    class MeshSprite3D extends RenderableSprite3D {
+9739:    class MeshSprite3DShaderDeclaration {
+9769:     * @en The `PixelLineData` class is used to represent line data.
+9772:    class PixelLineData {
+9812:     * @en The `PixelLineFilter` class is used for line filtering.
+9815:    class PixelLineFilter extends GeometryElement {
+9851:     * @en The PixelLineMaterial class is used to implement pixel line material.
+9854:    class PixelLineMaterial extends Material {
+9874:     * @en PixelLineRenderer class for line rendering.
+9877:    class PixelLineRenderer extends BaseRender {
+10022:     * @en PixelLineSprite3D class is used for pixel line rendering sprites.
+10025:    class PixelLineSprite3D extends RenderableSprite3D {
+10147:     * @en The `BaseRender` class is the parent class for renderers and is an abstract class that should not be instantiated.
+10150:    class BaseRender extends Component {
+10371:    class BlitFrameBufferCMD {
+10442:     * @en The BlitScreenQuadCMD class is used to create render the source texture to the destination render texture by using the full screen quad command.
+10445:    class BlitScreenQuadCMD extends Command {
+10519:     * @en The `Command` class is used to create commands.
+10521:     * @blueprintIgnore @blueprintIgnoreSubclasses
+10523:    class Command {
+10542:    class CommandBuffer {
+10882:    class ComputeCommandBufferCMD extends Command {
+10896:    class DrawMeshCMD extends Command {
+10925:     * @en DrawMeshInstancedCMD class for instanced mesh drawing command.
+10928:    class DrawMeshInstancedCMD extends Command {
+10994:    class DrawRenderCMD extends Command {
+11044:    class DrawRenderElementCMD extends Command {
+11077:     * @en The `ScreenQuad` class is used to create a fullscreen quad.
+11080:    class ScreenQuad extends GeometryElement {
+11112:    class MaterialInstancePropertyBlock {
+11191:    class SetDefineCMD extends Command {
+11204:    class InstanceRenderElement extends RenderElement {
+11232:     * @en The `PostProcess` class is used to create post-processing components.
+11235:    class PostProcess {
+11271:         * @param classReg The registered post-processing class type.
+11274:         * @param classReg 注册的后期处理类型
+11277:        getEffect<T extends PostProcessEffect>(classReg: new () => T): T;
+11294:     * @blueprintable @blueprintableSubclasses
+11296:    class PostProcessEffect {
+11337:     * @en The `PostProcessRenderContext` class is used to create a post-processing rendering context.
+11341:    class PostProcessRenderContext {
+11406:    class RenderContext3D {
+11493:     * @en RenderElement class is used to implement rendering elements.
+11495:     * @blueprintIgnore @blueprintIgnoreSubclasses
+11497:    class RenderElement {
+11542:     * @en The `SkyRenderElement` class is a render element that represents the sky.
+11545:    class SkyRenderElement extends RenderElement {
+11588:     * @en The `Sprite3DRenderDeclaration` class contains shader defines used in 3D sprite rendering.
+11591:    class Sprite3DRenderDeclaration {
+11601:    class RenderableSprite3D extends Sprite3D {
+11656:    class Lightmap {
+11679:     * @en The Scene3D class is used to create a 3D scene.
+11682:    class Scene3D extends Sprite {
+11865:         * @en Creates an instance of the Scene3D class.
+11939:     * @en The class is used to implement scene rendering node management.
+11943:    class SceneRenderManager {
+12000:    class SimpleSkinnedMeshRenderer extends SkinnedMeshRenderer {
+12050:     * @en The `SimpleSkinnedMeshSprite3D` class is used to create a simple skinned mesh.
+12053:    class SimpleSkinnedMeshSprite3D extends RenderableSprite3D {
+12081:     * @en The `SkinnedMeshRenderer` class is used for skinned mesh rendering.
+12084:    class SkinnedMeshRenderer extends MeshRenderer {
+12134:     * @en The `SkinnedMeshSprite3D` class is used for sprite with skinned mesh and bone nodes.
+12137:    class SkinnedMeshSprite3D extends RenderableSprite3D {
+12171:    class SkinnedMeshSprite3DShaderDeclaration {
+12184:     * @en The `Sprite3D` class is used to implement 3D sprites.
+12187:    class Sprite3D extends Node {
+12258:         * @en Creates an instance of the Sprite3D class.
+12289:     * @en The `Transform3D` class is used to implement 3D transformations.
+12292:    class Transform3D extends EventDispatcher {
+12599:     * @en UI3D class, used to create 3D UI components.
+12602:    class UI3D extends BaseRender {
+12640:        get prefab(): Prefab;
+12641:        set prefab(value: Prefab);
+12721:     * @en UI3DGeometry class is used to create and manage the geometry structure of 3D UI elements.
+12724:    class UI3DGeometry extends GeometryElement {
+12744:    class UI3DManager {
+12787:     * @en The `DepthPass` class is responsible for handling depth rendering and shadow mapping in a 3D scene.
+12790:    class DepthPass {
+12809:    class DeviceBuffer {
+12819:     * @en IndexBuffer3D class is used to create index buffer. Please use LayaGL.RenderOBJCreate.createIndexBuffer3D to create.
+12823:    class IndexBuffer3D {
+12893:    class SphericalHarmonicsL2 {
+12951:     * @en The `VertexBuffer3D` class is used to create vertex buffers. To create an instance of `VertexBuffer3D`, use `LayaGL.RenderOBJCreate.createIndexBuffer3D`.
+12955:    class VertexBuffer3D {
+13030:    class CubemapLoader implements IResourceLoader {
+13048:    class Texture2DArrayLoader implements IResourceLoader {
+13061:     * @en The `BoundBox` class is used for creating a bounding box.
+13064:    class BoundBox implements IClone {
+13170:     * @en The BoundFrustum class is used to create a frustum.
+13173:    class BoundFrustum implements IClone {
+13365:    class Bounds implements IClone {
+13504:     * @en BoundsImpl class is used to create a bounding box.
+13507:    class BoundsImpl implements IClone {
+13610:     * @en The BoundSphere class is used to create bounding balls.
+13613:    class BoundSphere implements IClone {
+13698:     * @en Collision class is used to detect collisions
+13701:    class CollisionUtils {
+14172:     * @en ContainmentType class defines the space object position relationship.
+14175:    class ContainmentType {
+14196:    class Plane {
+14265:     * @en The `RandX` class is used to generate random numbers using a 128-bit integer seed. The algorithm comes from the provided link: https://github.com/AndreasMadsen/xorshift
+14268:    class RandX {
+14297:     * @en Ray class used to create a ray.
+14300:    class Ray {
+14312:         * @en Constructor method of the ray class.
+14331:     * @en CharacterController class is used to create a character controller.
+14334:    class CharacterController extends PhysicsColliderComponent {
+14451:     * @en The Collision class is used to create physical collision information.
+14454:    class Collision {
+14474:     * @en The ConfigurableConstraint class is used for configurable constraint components.
+14477:    class ConfigurableConstraint extends ConstraintComponent {
+14779:     * @en ConstraintComponent class is the base class for creating constraints.
+14782:    class ConstraintComponent extends Component {
+14875:    class FixedConstraint extends ConstraintComponent {
+14885:    class HingeConstraint extends ConstraintComponent {
+14963:     * @en The `SpringConstraint` class represents a type of constraint that simulates spring behavior in a physics simulation.
+14966:    class SpringConstraint extends ConstraintComponent {
+15005:     * @en ContactPoint class used to create physical contact information.
+15008:    class ContactPoint {
+15046:     * @en The HitResult class is used to store the result of raycasting or shape scanning.
+15049:    class HitResult {
+15079:     * @en PhysicsCollider is a class used to create physical collider.
+15082:    class PhysicsCollider extends PhysicsColliderComponent {
+15142:     * @en PhysicsColliderComponent is the base class for creating physics components.
+15145:    class PhysicsColliderComponent extends Component {
+15244:     * @en The PhysicsSettings class is used to create physics configuration information.
+15246:    class PhysicsSettings {
+15279:     * @en The `PhysicsUpdateList` class is used to manage the physics update queue.
+15282:    class PhysicsUpdateList extends SingletonList<ICollider> {
+15290:    class Rigidbody3D extends PhysicsColliderComponent {
+15458:     * @en BoxColliderShape class is used to create box collider shape.
+15461:    class BoxColliderShape extends Physics3DColliderShape {
+15515:     * @en CapsuleColliderShape class is used to create capsule collider shape.
+15518:    class CapsuleColliderShape extends Physics3DColliderShape {
+15571:    class CompoundColliderShape extends Physics3DColliderShape {
+15625:     * @en ConeColliderShape class is used to create cone collider.
+15628:    class ConeColliderShape extends Physics3DColliderShape {
+15678:     * @en CylinderColliderShape class is used to create a cylinder collider.
+15681:    class CylinderColliderShape extends Physics3DColliderShape {
+15765:    class HeightFieldColliderShape extends Physics3DColliderShape {
+15776:     * @en The `MeshColliderShape` class is used to create mesh colliders.
+15779:    class MeshColliderShape extends Physics3DColliderShape {
+15821:     * @en The Physics3DColliderShape class serves as the base class for creating collider shapes and is an abstract class.
+15823:     * @blueprintable @blueprintableSubclasses
+15825:    class Physics3DColliderShape implements IClone {
+15886:     * @en The `SphereColliderShape` class is used to create spherical colliders.
+15889:    class SphereColliderShape extends Physics3DColliderShape {
+15914:     * @en The BloomEffect class is used to create a flood effect.
+15917:    class BloomEffect extends PostProcessEffect {
+16022:    class ColorGradEffect extends PostProcessEffect {
+16238:     * @en The `GaussianDoF` class is used to create a Gaussian Depth of Field effect.
+16249:    class GaussianDoF extends PostProcessEffect {
+16279:    class LensFlareCMD {
+16315:    class LensFlareElement {
+16400:    class LensFlareData extends Resource {
+16412:    class LensFlareEffect extends PostProcessEffect {
+16492:    class LensFlareElementGeomtry extends GeometryElement {
+16523:    class LensFlareShaderInit {
+16535:    class LensFlareSettingsLoader implements IResourceLoader {
+16568:     * @en The ScalableAO class is used to create ambient occlusion effect.
+16571:    class ScalableAO extends PostProcessEffect {
+16622:    class ACESShaderLib {
+16625:    class Laya3DRender {
+16634:     * @en Mesh class is used to create a template for file mesh data.
+16637:    class Mesh extends Resource implements IClone {
+16891:     * @en Utility class for mesh operations
+16894:    class MeshUtil {
+16909:    class MorphTarget {
+16932:    class MorphTargetChannel {
+16970:    class MorphTargetData {
+17039:     * @en The `PrimitiveMesh` class is used to create simple meshes.
+17042:    class PrimitiveMesh {
+17137:     * @en SkyBox class used to create a skybox.
+17140:    class SkyBox extends GeometryElement {
+17142:         * @en The singleton instance of the SkyBox class.
+17154:     * @en SkyDome class is used to create a sky dome.
+17157:    class SkyDome extends GeometryElement {
+17174:     * @en SkyRenderer class used to implement sky rendering.
+17177:    class SkyRenderer {
+17215:     * @en SubMesh class used to create submesh data template.
+17219:    class SubMesh extends GeometryElement {
+17253:    class BlinnPhongShaderInit {
+17256:    class PBRShaderLib {
+17292:    class PBRStandardShaderInit {
+17295:    class BlitScreenShaderInit {
+17298:    class SkyBoxShaderInit {
+17301:    class SkyPanoramicShaderInit {
+17304:    class SkyProceduralShaderInit {
+17307:    class UnlitShaderInit {
+17332:     * @en Camera culling information class.
+17335:    class CameraCullInfo {
+17371:    class ShadowCullInfo {
+17403:    class ShadowSpotData {
+17457:     * @en TextMesh class used to create text mesh.
+17460:    class TextMesh {
+17486:     * @en Physics3DUtils class represents a 3D physics collision group.
+17489:    class Physics3DUtils {
+17582:     * @en Picker class used to create picking.
+17585:    class Picker {
+17633:     * @en The `Size` class represents the dimensions of a rectangle or other shape in 2D space.
+17636:    class Size {
+17667:     * @en Utils3D is a class used to create 3D tools.
+17670:    class Utils3D {
+17880:     * @en This class is used to manage XRCamera
+17883:    class WebXRCameraManager {
+17935:         * @en Creates a new instance of the WebXRCameraManager class.
+17963:    class WebXRCameraInfo {
+17975:    class WebXRExperienceHelper {
+18049:     * @en The class used to describe the gamepad axis
+18052:    class AxiGamepad extends EventDispatcher {
+18079:     * @en The `ButtonGamepad` class is used to describe gamepad buttons.
+18082:    class ButtonGamepad extends EventDispatcher {
+18113:         * @en Creates a new instance of the `ButtonGamepad` class.
+18128:     * @en The `WebXRInput` class is used to describe input devices for WebXR.
+18131:    class WebXRInput extends EventDispatcher {
+18186:         * @en Creates a new instance of the `WebXRInput` class.
+18255:     * @en The `WebXRInputManager` class is responsible for managing input devices in a WebXR environment.
+18262:    class WebXRInputManager {
+18292:         * @en Creates a new instance of the `WebXRInputManager` class.
+18344:     * @en The `WebXRRenderTexture` class is used to create a render texture for WebXR rendering.
+18347:    class WebXRRenderTexture extends RenderTexture {
+18354:         * @en Creates a new instance of the `WebXRRenderTexture` class.
+18374:    class WebXRSessionManager extends EventDispatcher {
+18537:     * @en A class that encapsulates Geolocation-related functionalities can check if the browser supports the Geolocation API by using `Geolocation.supported`.
+18541:    class Geolocation {
+18642:     * @en The Media class is used for capturing camera and microphone input. You can capture either one or both simultaneously. Before calling getCamera, you can use supported() to check if the current browser supports it.
+18649:    class Media {
+18718:    class Accelerator extends EventDispatcher {
+18756:    class Gyroscope extends EventDispatcher {
+18770:     * @en A class that saves rotation information. Do not modify the properties of this category.
+18813:    class Shake extends EventDispatcher {
+18861:    class WebDeviceAdapter extends DeviceAdapter {
+18888:     * @en The Animation class is used to play frame animation.
+18891:    class Animation extends Sprite {
+19048:    class Area2D extends Sprite {
+19079:     * @en BitmapFont is a bitmap font class used to define bitmap font information.
+19083:    class BitmapFont extends Resource {
+19196:    class AlphaCmd implements IGraphicsCmd {
+19247:    class ClipRectCmd implements IGraphicsCmd {
+19314:    class Draw9GridTextureCmd implements IGraphicsCmd {
+19423:    class DrawCircleCmd implements IGraphicsCmd {
+19518:    class DrawCurvesCmd implements IGraphicsCmd {
+19600:    class DrawEllipseCmd implements IGraphicsCmd {
+19703:    class DrawImageCmd implements IGraphicsCmd {
+19788:    class DrawLineCmd implements IGraphicsCmd {
+19882:    class DrawLinesCmd implements IGraphicsCmd {
+19960:    class DrawPathCmd implements IGraphicsCmd {
+20038:    class DrawPieCmd implements IGraphicsCmd {
+20145:    class DrawPolyCmd implements IGraphicsCmd {
+20229:    class DrawRectCmd implements IGraphicsCmd {
+20332:    class DrawRoundRectCmd implements IGraphicsCmd {
+20475:    class DrawTextureCmd implements IGraphicsCmd {
+20597:    class DrawTexturesCmd implements IGraphicsCmd {
+20668:    class DrawTrianglesCmd implements IGraphicsCmd {
+20801:    class FillTextCmd implements IGraphicsCmd {
+20955:    class FillTextureCmd implements IGraphicsCmd {
+21064:    class RestoreCmd implements IGraphicsCmd {
+21100:    class RotateCmd implements IGraphicsCmd {
+21165:    class SaveCmd implements IGraphicsCmd {
+21201:    class ScaleCmd implements IGraphicsCmd {
+21273:    class TransformCmd implements IGraphicsCmd {
+21338:    class TranslateCmd implements IGraphicsCmd {
+21388:     * @en Text style class
+21391:    class TextStyle {
+21494:    class BlurEffect2D extends PostProcess2DEffect {
+21524:    class ColorEffect2D extends PostProcess2DEffect {
+21663:    class GrayscaleEffect2D extends ColorEffect2D {
+21666:    class GlowEffect2D extends PostProcess2DEffect {
+21731:    class Effect2DShaderInit {
+21737:     * @en The Graphics class is used to create drawing display objects. Graphics can draw multiple bitmaps or vector graphics simultaneously, and can also combine instructions such as save, restore, transform, scale, rotate, translate, alpha, etc. to change the drawing effect.
+21742:    class Graphics {
+22314:     * @en Graphic bounds data class
+22317:    class GraphicsBounds {
+22355:     * @blueprintableSubclasses
+22402:     * @en The Input class is used to create display objects to display and input text.
+22403:     * The Input class encapsulates the native text input box. Due to differences between browsers, there may be slight deviations between the position of the default text of this object and the position of the text when the user clicks to input.
+22417:    class Input extends Text {
+22600:    class CircleMesh implements IMeshFactory {
+22603:    class FlipMesh implements IMeshFactory {
+22640:    class ProgressMesh implements IMeshFactory {
+22676:    class RegularPolygonMesh implements IMeshFactory {
+22714:    class RoundedRectMesh implements IMeshFactory {
+22737:    class TileMesh implements IMeshFactory {
+22752:     * @en The `Node` class is the base class for all objects that can be placed in the display list.
+22754:     * Use the Node class to arrange the display list. A Node object can have child display objects.
+22757:     * @blueprintable @blueprintableSubclasses
+22759:    class Node extends EventDispatcher {
+22800:         * @en Whether it is a 3D node, i.e., Scene3D, Sprite3D and their derived classes.
+22931:        * @param classType Optional child node type, used to specify the type of the returned child node.
+22935:        * @param classType 可选的子节点类型，用于明确返回子节点的类型。
+22938:        getChild<T extends Node = ChildType<this>>(name: string, classType?: new (...args: any[]) => T): T;
+22942:         * @param classType Optional child node type, used to specify the type of the returned child node.
+22946:         * @param classType 可选的子节点类型，用于明确返回子节点的类型。
+22949:        getChildByName<T extends Node = ChildType<this>>(name: string, classType?: new (...args: any[]) => T): T;
+22953:         * @param classType Optional child node type, used to specify the type of the returned child node.
+22957:         * @param classType 可选的子节点类型，用于明确返回子节点的类型。
+22960:        getChildAt<T extends Node = ChildType<this>>(index: number, classType?: new (...args: any[]) => T): T;
+22964:         * @param classType Optional child node type, used to specify the type of the returned child node.
+22968:         * @param classType 可选的子节点类型，用于明确返回子节点的类型。
+22971:        getChildByPath<T extends Node = ChildType<this>>(path: String, classType?: new (...args: any[]) => T): T;
+22973:         * @en Recursively find child nodes, but will not se
+
+[… truncated 84962 chars …]

@@ -1,0 +1,25 @@
+{
+  "resolution": {
+    "designWidth": 750,
+    "designHeight": 1334,
+    "scaleMode": "showall",
+    "screenMode": "vertical",
+    "backgroundColor": "#ffffff"
+  },
+  "modules": {
+    "laya.ui": true,
+    "laya.d3": true,
+    "laya.tilemap": true,
+    "laya.physics2D": true,
+    "laya.tiledmap_discarded": true,
+    "laya.blueprint": true,
+    "laya.navMesh2D": true,
+    "laya.spine": true
+  },
+  "addons": {
+    "laya.ui": "ui2"
+  },
+  "splash": {
+    "fit": "center"
+  }
+}

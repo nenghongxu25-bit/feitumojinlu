@@ -1,0 +1,126 @@
+{
+  "_$ver": 1,
+  "_$id": "8kxxv7uk",
+  "_$type": "Sprite",
+  "name": "sprite",
+  "width": 750,
+  "height": 1334,
+  "_$child": [
+    {
+      "_$id": "fxeimoks",
+      "_$type": "GPanel",
+      "name": "panel",
+      "width": 750,
+      "height": 1334,
+      "background": {
+        "_$type": "DrawRectCmd",
+        "fillColor": "#f0b4b4"
+      },
+      "_$child": [
+        {
+          "_$id": "si4lhfjl",
+          "_$type": "GBox",
+          "name": "box",
+          "x": 40,
+          "y": 40,
+          "width": 300,
+          "height": 300,
+          "background": {
+            "_$type": "DrawRectCmd",
+            "lineWidth": 5,
+            "lineColor": "#000000",
+            "fillColor": "#a06060"
+          },
+          "_$comp": [
+            {
+              "_$type": "62e8915d-ba31-4558-a5f3-9e6cc70cdd1f",
+              "scriptPath": "../src/Navigation/OpenPanel.ts",
+              "targetPrefab": "lengbing.lh"
+            }
+          ],
+          "_$child": [
+            {
+              "_$id": "mm5as31y",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 300,
+              "height": 300,
+              "text": "冷兵\n改装",
+              "fontSize": 90,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2
+            }
+          ]
+        },
+        {
+          "_$id": "dqy9l4wf",
+          "_$type": "GBox",
+          "name": "box_1",
+          "x": 390,
+          "y": 40,
+          "width": 300,
+          "height": 300,
+          "background": {
+            "_$type": "DrawRectCmd",
+            "lineWidth": 5,
+            "lineColor": "#000000",
+            "fillColor": "#a06060"
+          },
+          "_$child": [
+            {
+              "_$id": "yenj5sht",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 300,
+              "height": 300,
+              "text": "枪炮\n改装",
+              "fontSize": 90,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2
+            }
+          ]
+        },
+        {
+          "_$id": "rpsz9jpn",
+          "_$type": "GBox",
+          "name": "box_2",
+          "x": 198,
+          "y": 605,
+          "width": 300,
+          "height": 300,
+          "background": {
+            "_$type": "DrawRectCmd",
+            "lineWidth": 5,
+            "lineColor": "#000000",
+            "fillColor": "#a06060"
+          },
+          "_$comp": [
+            {
+              "_$type": "3bcba550-db5b-4fe2-861a-1c70a9e9e600",
+              "scriptPath": "../src/Navigation/ClosePanel.ts"
+            }
+          ],
+          "_$child": [
+            {
+              "_$id": "0fn2he85",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 300,
+              "height": 300,
+              "text": "返回",
+              "fontSize": 90,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

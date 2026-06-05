@@ -1,0 +1,148 @@
+{
+  "_$ver": 1,
+  "_$id": "wflb9xat",
+  "_$type": "Sprite",
+  "name": "Scene2D",
+  "width": 750,
+  "height": 1334,
+  "_$comp": [
+    {
+      "_$type": "d1cb182f-f747-4799-82de-5dc5b6f6210e",
+      "scriptPath": "../src/Warehouse/WarehousePageManager.ts"
+    }
+  ],
+  "_$child": [
+    {
+      "_$id": "ul53kbx7",
+      "_$type": "GList",
+      "name": "warehouse_list",
+      "y": 584,
+      "width": 750,
+      "height": 750,
+      "background": {
+        "_$type": "DrawRectCmd",
+        "lineWidth": 10,
+        "lineColor": "#000000",
+        "fillColor": "#e35454"
+      },
+      "layout": {
+        "type": 3,
+        "rows": 4,
+        "columns": 5
+      },
+      "scroller": {
+        "_$type": "Scroller",
+        "barDisplay": 5
+      },
+      "_templateNode": {
+        "_$ref": "yuuqdqpr",
+        "_$tmpl": "itemTemplate"
+      },
+      "_initItemNum": 50,
+      "_itemData": [],
+      "_$comp": [
+        {
+          "_$type": "b4be0df5-77d1-46df-885a-fa10204ce7b4",
+          "scriptPath": "../src/Warehouse/WarehouseList.ts"
+        }
+      ],
+      "_$child": [
+        {
+          "_$id": "yuuqdqpr",
+          "_$type": "GBox",
+          "name": "box",
+          "width": 150,
+          "height": 150,
+          "background": {
+            "_$type": "DrawRectCmd",
+            "lineWidth": 10,
+            "lineColor": "#000000",
+            "fillColor": "#d19292"
+          },
+          "_$child": [
+            {
+              "_$id": "nvgdan3x",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 150,
+              "height": 150,
+              "fontSize": 45,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_$id": "7mgcu3m8",
+      "_$type": "GList",
+      "name": "backpack_list",
+      "y": 300,
+      "width": 750,
+      "height": 284,
+      "background": {
+        "_$type": "DrawRectCmd",
+        "lineWidth": 10,
+        "lineColor": "#000000",
+        "fillColor": "#b69797"
+      },
+      "layout": {
+        "type": 3,
+        "rows": 5,
+        "columns": 5
+      },
+      "scroller": {
+        "_$type": "Scroller",
+        "barDisplay": 5
+      },
+      "_templateNode": {
+        "_$ref": "4jxgoj55",
+        "_$tmpl": "itemTemplate"
+      },
+      "_initItemNum": 20,
+      "_$comp": [
+        {
+          "_$type": "5ecaef13-94af-42d1-9d84-013e9d4e0c8f",
+          "scriptPath": "../src/Warehouse/BackpackList.ts"
+        }
+      ],
+      "_$child": [
+        {
+          "_$id": "4jxgoj55",
+          "_$type": "GBox",
+          "name": "box",
+          "width": 150,
+          "height": 150,
+          "background": {
+            "_$type": "DrawRectCmd",
+            "lineWidth": 10,
+            "lineColor": "#000000",
+            "fillColor": "#e3d6d6"
+          },
+          "layout": {
+            "type": 3,
+            "columns": 5,
+            "rowGap": 5
+          },
+          "_$child": [
+            {
+              "_$id": "xstjhjvw",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 150,
+              "height": 150,
+              "fontSize": 45,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

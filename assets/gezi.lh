@@ -1,0 +1,48 @@
+{
+  "_$ver": 1,
+  "_$id": "sl8crck4",
+  "_$type": "Sprite",
+  "name": "Sprite",
+  "width": 250,
+  "height": 250,
+  "_gcmds": [
+    {
+      "_$type": "DrawRectCmd",
+      "lineWidth": 10,
+      "lineColor": "#000000",
+      "fillColor": "#ef6868"
+    }
+  ],
+  "_$child": [
+    {
+      "_$id": "qmptci9q",
+      "_$type": "Text",
+      "name": "Text",
+      "x": 50,
+      "y": 10,
+      "width": 150,
+      "height": 150,
+      "text": "Text",
+      "fontSize": 60,
+      "color": "#ffffff",
+      "align": "center",
+      "valign": "middle",
+      "leading": 2
+    },
+    {
+      "_$id": "iqvkxth9",
+      "_$type": "Text",
+      "name": "Text_1",
+      "x": 50,
+      "y": 170,
+      "width": 150,
+      "height": 50,
+      "text": "Text",
+      "fontSize": 40,
+      "color": "#ffffff",
+      "align": "center",
+      "valign": "middle",
+      "leading": 2
+    }
+  ]
+}
