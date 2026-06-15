@@ -1,0 +1,8 @@
+.git
+.reasonix
+library
+local
+node_modules
+release
+temp
+bin/js/bundles
