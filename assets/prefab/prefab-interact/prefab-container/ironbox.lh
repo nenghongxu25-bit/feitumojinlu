@@ -1,0 +1,65 @@
+{
+  "_$ver": 1,
+  "_$id": "jaw335na",
+  "_$type": "Sprite",
+  "name": "Sprite",
+  "width": 256,
+  "height": 170,
+  "_$comp": [
+    {
+      "_$id": "fwbm",
+      "_$type": "StaticCollider",
+      "shapes": [
+        {
+          "_$type": "BoxShape2D",
+          "x": 0,
+          "y": 0,
+          "density": 10,
+          "restitution": 0,
+          "restitutionThreshold": 1,
+          "friction": 0.2,
+          "isSensor": true,
+          "width": 256,
+          "height": 170
+        }
+      ]
+    },
+    {
+      "_$type": "d742f9d7-34ba-4ae9-abdd-d9fe9fe306f6",
+      "scriptPath": "../src/container/ironbox.ts",
+      "containerId": "",
+      "instanceId": "",
+      "displayName": "",
+      "contentsJson": "",
+      "once": true,
+      "destroyAfterOpen": false
+    },
+    {
+      "_$id": "depth_sortable",
+      "_$type": "1806c38c-ebc3-45d1-a8a0-322ed94be4cb",
+      "scriptPath": "../src/systems/DepthSortable.ts",
+      "groundY": 153,
+      "blendDistance": 0
+    },
+    {
+      "_$type": "ad602582-0a8d-4d34-8573-3cab8b47a2b0",
+      "scriptPath": "../src/systems/ImageDepthOccluder.ts",
+      "imageNode": {
+        "_$ref": "2gj53fsf"
+      }
+    }
+  ],
+  "_$child": [
+    {
+      "_$id": "2gj53fsf",
+      "_$type": "GImage",
+      "name": "img",
+      "width": 128,
+      "height": 85,
+      "scaleX": 2,
+      "scaleY": 2,
+      "src": "res://f284be9f-a1d5-4a7c-acde-252fb7bacc54",
+      "autoSize": false
+    }
+  ]
+}

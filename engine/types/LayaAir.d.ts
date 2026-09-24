@@ -2662,6 +2662,24 @@ declare namespace Laya {
          */
         private _bridge3DRenderProcess;
         /**
+         * Scene → stage 的 4x4 偏移矩阵。
+         * 由 Bridge3DSceneInternal 监听 Scene2D 的 TRANSFORM_CHANGED 事件后推送进来。
+         * render() 时会左乘到 viewMatrix，从而把 sceneLocal 模型坐标补偿成 stage 像素坐标。
+         * 未设置时使用单位矩阵（行为等价于 sceneLocal == globalTrans 的情况，即 Scene 在 stage 原点）。
+         * @private
+         */
+        private _sceneOffsetMatrix;
+        /**
+         * sceneOffsetMatrix 是否为单位矩阵的标志。单位时 render() 可跳过额外矩阵乘法。
+         * @private
+         */
+        private _sceneOffsetIsIdentity;
+        /**
+         * Called when projection parameters that affect Bridge3D camera placement change.
+         * @private
+         */
+        private _projectionChangeHandler;
+        /**
          * 构造函数
          */
         constructor();
@@ -2674,6 +2692,34 @@ declare namespace Laya {
          * 获取Bridge3D渲染流程
          */
         get bridge3DRenderProcess(): IBridge3DRenderProcess;
+        get fieldOfView(): number;
+        set fieldOfView(value: number);
+        /**
+         * 设置 Scene → stage 的偏移矩阵。
+         *
+         * 矩阵推导（设 Scene 2D 全局矩阵为 (a, b, c, d, tx, ty)，stage 高度为 H）：
+         * ```
+         * | a   -c   0   c*H + tx        |
+         * | -b   d   0   H*(1-d) - ty    |
+         * | 0    0   1   0               |
+         * | 0    0   0   1               |
+         * ```
+         * 注意：H 来自 RenderState2D.height，stage resize 时也需要重算。
+         *
+         * @param a/b/c/d/tx/ty Scene 2D 全局矩阵分量
+         * @param renderHeight 当前渲染高度（用于最终 stage/canvas Y-up 空间）
+         * @param sceneHeight Scene 逻辑高度（用于 sceneLocal 自身的 Y 翻转）
+         */
+        setSceneOffsetFrom2DMatrix(a: number, b: number, c: number, d: number, tx: number, ty: number, renderHeight: number, sceneHeight?: number): void;
+        /**
+         * 读取当前的 Scene→stage 偏移矩阵（只读引用，不要在外部修改）。
+         * 用于把 sceneLocal 3D 世界坐标映射回 stage 像素空间，或反向。
+         */
+        get sceneOffsetMatrix(): Matrix4x4;
+        /**
+         * 偏移矩阵是否为单位矩阵（Scene 位于 stage 原点且无缩放/旋转）。
+         */
+        get sceneOffsetIsIdentity(): boolean;
         /**
          * 重写Camera.render()，匹配Scene3D Camera.render()的流程：
          *   1. 上下文设置
@@ -2704,6 +2750,7 @@ declare namespace Laya {
     class Bridge3DData {
         private _cameraZDistance;
         private _cameraFarPlane;
+        private _orthographicCamera;
         /**
          * @en Camera Z distance.
          * @zh 相机 Z 距离。
@@ -2716,6 +2763,12 @@ declare namespace Laya {
          */
         get cameraFarPlane(): number;
         set cameraFarPlane(value: number);
+        /**
+         * @en Whether Bridge3D uses an orthographic camera. When false, Bridge3D uses a perspective camera and derives fieldOfView from cameraZDistance to keep the Z=0 plane aligned with 2D pixels. Very small distances are clamped by the runtime maximum FOV.
+         * @zh Bridge3D 是否使用正交相机。为 false 时使用透视相机，并根据 cameraZDistance 反推 fieldOfView，使 Z=0 平面继续与 2D 像素对齐。过小的距离会被运行时最大视角限制保护。
+         */
+        get orthographicCamera(): boolean;
+        set orthographicCamera(value: boolean);
         /**
          * @en Scene3D settings data. Used by runtime deserialization (ObjDecoder merges data into this object).
          * Applied to scene3d during finalization.
@@ -2765,6 +2818,23 @@ declare namespace Laya {
          */
         private _cameraZDistance;
         /**
+         * Whether Bridge3D uses orthographic projection.
+         * When false, fieldOfView is derived from camera Z so the Z=0 plane maps 1:1 to 2D pixels.
+         * @private
+         */
+        private _orthographicCamera;
+        /**
+         * Guards against re-entering projection updates from camera setters.
+         * @private
+         */
+        private _updatingCameraProjection;
+        /**
+         * Maximum perspective FOV used by Bridge3D's 2D anchored projection.
+         * Prevents very small cameraZDistance values from creating extreme fish-eye distortion.
+         * @private
+         */
+        private static readonly _maxPerspectiveFieldOfView;
+        /**
          * Bridge3D独立的灯光贴图
          * @private
          */
@@ -2777,7 +2847,7 @@ declare namespace Laya {
         /**
          * Bridge3D渲染上下文（供process访问）
          */
-        get bridge3DContext(): Bridge3DContext | RTBridge3DContext;
+        get bridge3DContext(): Bridge3DContext | LayaXBridge3DContext | RTBridge3DContext;
         /**
          * Create Bridge3DScene3D instance
          * @param holder - The owning Bridge3DSceneInternal
@@ -2788,6 +2858,11 @@ declare namespace Laya {
          * @param value - Camera Z distance
          */
         applyCameraZDistance(value: number): void;
+        /**
+         * Apply Bridge3D camera projection mode (called by holder).
+         * @param value - True for orthographic camera, false for perspective camera.
+         */
+        applyOrthographicCamera(value: boolean): void;
         /**
          * Apply camera far plane (called by holder)
          * @param value - Camera far clipping plane distance
@@ -2801,8 +2876,16 @@ declare namespace Laya {
          * @private
          */
         private _findOwnerBridge3DSprite;
+        private _getRenderHeight;
+        private _getRenderWidth;
+        private _getMinPerspectiveCameraZ;
+        private _getEffectiveCameraZ;
+        private _getPerspectiveFieldOfView;
+        private _updateCameraProjectionAndPosition;
         /**
-         * Update camera position based on current stage size and camera Z distance
+         * Update camera position based on current render size and projection mode.
+         * In perspective mode, cameraZDistance drives camera Z and the FOV is derived from it.
+         * This keeps the Z=0 plane aligned with 2D pixels across the whole render surface.
          * @private
          */
         private _updateCameraPosition;
@@ -2842,6 +2925,23 @@ declare namespace Laya {
      */
     class Bridge3DSceneInternal implements IBridge3DSceneInternal {
         constructor(scene: Scene);
+        /**
+         * 根据 Scene 当前的 globalTrans + stage 高度，更新 Bridge3DCamera 的 sceneOffsetMatrix。
+         * 触发时机：Scene transform 改变、stage resize、scene3d 首次创建。
+         * @private
+         */
+        private _updateSceneOffset;
+        private _onScene2DResize;
+        /**
+         * 挂载 sceneOffset 相关事件监听（idempotent）。
+         * @private
+         */
+        private _hookOffsetListeners;
+        /**
+         * 卸载 sceneOffset 相关事件监听。
+         * @private
+         */
+        private _unhookOffsetListeners;
         _onAdded(): void;
         _onRemoved(): void;
         /**
@@ -2885,6 +2985,17 @@ declare namespace Laya {
          * data 为 null 时恢复默认值。
          */
         applyData(data: any): void;
+        /**
+         * @en Re-apply holder settings after deserialization, once bridge3D data is fully populated.
+         * Called by Scene.onAfterDeserialize. Scene3D creation, camera intrinsics and bridge
+         * registration already happened inside registerBridge3D / initScene3D — this is only a
+         * final data-apply pass to cover the case where holder data arrives after the bridges.
+         * @zh 反序列化完成、holder 数据就绪后重新套用一次配置。
+         * scene3d 创建、相机内参、bridge 注册都已在 registerBridge3D / initScene3D 中完成，
+         * 此处仅做一次最终的数据 apply，覆盖 holder 数据晚于 bridge 到位的情况。
+        
+         */
+        finalizeSetup(): void;
         /**
          * @en Destroy scene3d and clear the list.
          * @zh 销毁 scene3d 并清空列表。
@@ -3036,11 +3147,19 @@ declare namespace Laya {
          */
         protected _transChanged(flag: number): void;
         /**
+         * 计算 sceneLocal 2D 矩阵：等价于沿 parent 链累乘到（不含）Scene 节点。
+         * 数学上：sceneLocal = sceneGlobal⁻¹ · selfGlobal
+         *
+         * 没有 _scene 时退化为 selfGlobal，保持向后兼容。
+         * @private
+         */
+        private _computeSceneLocalMatrix;
+        /**
          * 同步2D变换到3D容器
          * @private
          * @remarks
-         * 使用Bridge3DCoordinate工具类进行坐标转换，确保2D逻辑坐标正确映射到3D世界坐标
-         * 使用全局变换矩阵，确保正确处理父节点的变换（包括倾斜）
+         * 使用 sceneLocal 矩阵进行变换提取：3D 容器只表达 "Bridge 在 Scene 内的局部变换"。
+         * Scene 自身的偏移/缩放由 Bridge3DCamera 的 sceneOffsetMatrix 在 view 矩阵阶段补偿。
          */
         private _syncTransform2DTo3D;
         /**
@@ -3066,6 +3185,16 @@ declare namespace Laya {
         /**
          * 将3D包围盒投影到2D本地坐标空间
          * @private
+         *
+         * @remarks
+         * 3D 世界坐标的语义：
+         *   pos3D = (sceneLocal.x, scene.height - sceneLocal.y, 0)
+         * 所以反推：
+         *   sceneLocal_2D = (world.x, scene.height - world.y)
+         * 然后 sceneLocal → stage 通过 scene.localToGlobal 完成；
+         * stage → bridge_local 复用 this.globalToLocal。
+         *
+         * 没有 _scene 时 sceneLocal == selfGlobal，跳过 scene.localToGlobal，直接走 globalToLocal。
          */
         private _project3DTo2D;
         /**
@@ -3147,6 +3276,15 @@ declare namespace Laya {
          * 全局shader数据
          */
         private _globalShaderData;
+        /**
+         * Scene-to-stage correction matrix pushed by Bridge3DScene3D.
+         */
+        private _sceneOffsetMatrix;
+        /**
+         * Bridge3D logical render plane size.
+         */
+        private _bridgePlaneWidth;
+        private _bridgePlaneHeight;
         private _color;
         /**
          * 2D当前渲染目标（null表示屏幕）
@@ -3198,6 +3336,10 @@ declare namespace Laya {
          * 设置全局shader数据
          */
         setGlobalShaderData(data: ShaderData): void;
+        /**
+         * Set projection-space data required by Bridge3D render passes.
+         */
+        setBridgeProjectionData(sceneOffsetMatrix: Matrix4x4, bridgePlaneWidth: number, bridgePlaneHeight: number): void;
         /**
          * 设置2D渲染目标
          */
@@ -3316,6 +3458,18 @@ declare namespace Laya {
          */
         get globalShaderData(): ShaderData;
         /**
+         * Scene-to-stage matrix used by WebBridge3DRenderProcess.
+         */
+        get sceneOffsetMatrix(): Matrix4x4;
+        /**
+         * Logical Bridge3D render plane width.
+         */
+        get bridgePlaneWidth(): number;
+        /**
+         * Logical Bridge3D render plane height.
+         */
+        get bridgePlaneHeight(): number;
+        /**
          * Bridge3D独立的灯光贴图（用于解决全局灯光贴图冲突问题）
          * @private
          */
@@ -3419,7 +3573,7 @@ declare namespace Laya {
      *   render (元素级：前向渲染，由每个 element 的 _render 调用)
      *
      * Web 实现: WebBridge3DRenderProcess (纯TS逻辑)
-     * Native 实现: RTBridge3DRenderProcess (委托C++ conchGLESBridge3DRenderProcess)
+     * Native 实现: LayaXBridge3DRenderProcess (委托 C++ conchLayaXBridge3DProcess → Rust wgpu)
      */
     interface IBridge3DRenderProcess {
         /** 场景渲染管理器（与 IRender3DProcess.render3DManager 对称） */
@@ -3447,6 +3601,156 @@ declare namespace Laya {
         destroy(): void;
     }
     /**
+     * LayaXBridge3DContext - LayaX (wgpu) native wrapper for Bridge3D rendering context
+     *
+     * Uses conchLayaXBridge3DContext native class.
+     * Each setter syncs to C++ via _nativeObj, C++ calls Rust FFI.
+     */
+    class LayaXBridge3DContext {
+        _nativeObj: any;
+        constructor();
+        setSceneModuleData(data: ISceneNodeData): void;
+        setCameraModuleData(data: ICameraNodeData): void;
+        setSceneData(data: ShaderData): void;
+        setCameraData(data: ShaderData): void;
+        setGlobalShaderData(data: ShaderData): void;
+        setBridgeProjectionData(sceneOffsetMatrix: Matrix4x4, bridgePlaneWidth: number, bridgePlaneHeight: number): void;
+        setRenderTarget2D(rt: InternalRenderTarget): void;
+        getRenderTarget2D(): InternalRenderTarget;
+        setViewPort(vp: Viewport): void;
+        setScissor(sc: Vector4): void;
+        setClearData(flag: number, color: Color, depthValue: number, stencilValue: number): void;
+        setInvertMatrix(a: number, b: number, c: number, d: number, tx: number, ty: number): void;
+        applyToContext(context: IRenderContext3D): void;
+        get clearDepthBeforeRender(): boolean;
+        set clearDepthBeforeRender(value: boolean);
+        get clearDepth(): number;
+        set clearDepth(value: number);
+        get clearStencil(): number;
+        set clearStencil(value: number);
+        get pipelineMode(): PipelineMode;
+        set pipelineMode(value: PipelineMode);
+        private _invertY;
+        get invertY(): boolean;
+        set invertY(value: boolean);
+        get sceneModuleData(): ISceneNodeData;
+        get cameraModuleData(): ICameraNodeData;
+        get sceneData(): ShaderData;
+        get cameraData(): ShaderData;
+        get globalShaderData(): ShaderData;
+        setBridge3DLightData(lightTexture: any, lightPixels: Float32Array): void;
+        get bridge3DLightTexture(): any;
+        get bridge3DLightPixels(): Float32Array;
+        /**
+         * Update viewport/scissor from camera
+         */
+        updateFromCamera(camera: Camera): void;
+        /**
+         * 合并多个初始化操作为一次 C++ 调用
+         * 包含: updateFromCamera + applyToContext + addPreDrawUniformMap("Scene3D") + addPreDrawUniformMap("Global")
+         * 同时设置 stageRenderSize
+         */
+        prepareForRender(camera: Camera, context3d: IRenderContext3D): void;
+    }
+    /**
+     * LayaXBridge3DRenderElement - LayaX (wgpu) native implementation of IBridgeRenderElement
+     *
+     * Wraps the C++ LayaXBridge3DRenderElement2D_JS which handles all rendering logic
+     * (projection correction, clip transform, 3D queue rendering) via Rust FFI.
+     */
+    class LayaXBridge3DRenderElement implements IBridgeRenderElement {
+        type: number;
+        private _geometry;
+        set geometry(v: IRenderGeometryElement);
+        get geometry(): IRenderGeometryElement;
+        materialShaderData: ShaderData;
+        value2DShaderData: ShaderData;
+        globalShaderData: ShaderData;
+        subShader: SubShader;
+        renderStateIsBySprite: boolean;
+        nodeCommonMap: Array<string>;
+        _index?: number;
+        _nativeObj: any;
+        private _owner;
+        private _baseRenderList;
+        private _bridge3DContext;
+        private _opaqueList;
+        private _transparentList;
+        constructor();
+        get owner(): IRenderStruct2D;
+        set owner(value: IRenderStruct2D);
+        addBaseRenderNode(node: IBaseRenderNode): void;
+        removeBaseRenderNode(node: IBaseRenderNode): void;
+        setBridge3DContext(context: any): void;
+        setRenderProcess(process: IBridge3DRenderProcess): void;
+        getBaseRenderList(): SingletonList<IBaseRenderNode>;
+        getOpaqueList(): RenderListQueue;
+        getTransparentList(): RenderListQueue;
+        /**
+         * 获取Bridge3D渲染上下文
+         */
+        get bridge3DContext(): LayaXBridge3DContext;
+        collectElements(context3d: any): number;
+        _prepare(context: IRenderContext2D): void;
+        /**
+         * 渲染3D内容到2D当前RT
+         * C++端 LayaXBridge3DRenderElement2D_JS 负责完整流程:
+         *   collectFromNodes → renderProcess->render (三阶段)
+         */
+        _render(context: IRenderContext2D): void;
+        destroy(): void;
+    }
+    /**
+     * LayaXBridge3DRenderProcess - modernAPIs (wgpu) native Bridge3D统一渲染流程
+     *
+     * 遵循 LayaXRender3DProcess 的模式：声明式属性配置 → 单次C++执行调用
+     * 阴影阶段使用 LayaXDirCascadeShadowRP/LayaXBaseSpotRP (LayaX variants)
+     * 前向阶段委托C++ conchLayaXBridge3DProcess 处理
+     */
+    class LayaXBridge3DRenderProcess implements IBridge3DRenderProcess {
+        _nativeObj: any;
+        /** LayaX directional shadow render pass */
+        private _dirShadowRP;
+        /** LayaX spot shadow render pass */
+        private _spotShadowRP;
+        /** 默认阴影贴图（1x1占位） */
+        private _defaultShadowMap;
+        /** 场景渲染管理器 */
+        private _render3DManager;
+        get render3DManager(): ISceneRenderManager;
+        set render3DManager(value: ISceneRenderManager);
+        /** 已注册的 Bridge3D 渲染元素列表 */
+        private _bridgeElements;
+        constructor();
+        addBridgeElement(element: IBridgeRenderElement): void;
+        removeBridgeElement(element: IBridgeRenderElement): void;
+        /**
+         * 统一渲染入口（对标 LayaXRender3DProcess.fowardRender）
+         * 由 Bridge3DCamera.render() 调用，编排完整流程：
+         *   1. syncProjection (同步相机参数到Rust ECS)
+         *   2. Bridge3D context 准备（单次 C++ 调用）
+         *   3. 元素 context3d 设置
+         *   4. 阴影渲染（条件）
+         */
+        fowardRender(context3d: IRenderContext3D, camera: Camera): void;
+        /**
+         * 阴影渲染（由 fowardRender 内部调用）
+         * 遵循 LayaXRender3DProcess.initRenderpass 的声明式模式：
+         *   TS 端配置属性 → 单次 C++ renderShadows 执行
+         *
+         * 使用 LayaX shadow RP 类（LayaXDirCascadeShadowRP/LayaXBaseSpotRP）
+         * 和 LayaX uniform map 管理（conchLayaXRT3DRenderProcess._addPreDrawUniformMap）
+         */
+        renderShadows(context: IRenderContext3D, camera: Camera): void;
+        /**
+         * 完整前向渲染流程 (单次C++调用)
+         * C++ 端执行 3-phase pipeline:
+         *   initBridge3DRenderPass → prepareProjectionCorrection → renderBridge3DForward
+         */
+        render(element: IBridgeRenderElement, context2d: IRenderContext2D, context3d: IRenderContext3D): void;
+        destroy(): void;
+    }
+    /**
      * RTBridge3DContext - Native wrapper for GLESBridge3DContext
      *
      * Wraps the C++ GLESBridge3DContext for use on native platforms.
@@ -3459,6 +3763,7 @@ declare namespace Laya {
         setSceneData(data: ShaderData): void;
         setCameraData(data: ShaderData): void;
         setGlobalShaderData(data: ShaderData): void;
+        setBridgeProjectionData(sceneOffsetMatrix: Matrix4x4, bridgePlaneWidth: number, bridgePlaneHeight: number): void;
         setRenderTarget2D(rt: InternalRenderTarget): void;
         getRenderTarget2D(): InternalRenderTarget;
         setViewPort(vp: Viewport): void;
@@ -3505,7 +3810,9 @@ declare namespace Laya {
      */
     class RTBridge3DRenderElement implements IBridgeRenderElement {
         type: number;
-        geometry: IRenderGeometryElement;
+        private _geometry;
+        set geometry(v: IRenderGeometryElement);
+        get geometry(): IRenderGeometryElement;
         materialShaderData: ShaderData;
         value2DShaderData: ShaderData;
         globalShaderData: ShaderData;
@@ -3624,6 +3931,8 @@ declare namespace Laya {
         private static _tempScissor;
         private static _savedProjMatrix;
         private static _savedProjViewMatrix;
+        private static _sceneCorrectionMatrix;
+        private static _combinedCorrectionMatrix;
         constructor();
         addBridgeElement(element: IBridgeRenderElement): void;
         removeBridgeElement(element: IBridgeRenderElement): void;
@@ -3649,6 +3958,7 @@ declare namespace Laya {
          * 阶段2: 投影校正准备
          */
         prepareProjectionCorrection(element: IBridgeRenderElement, context2d: IRenderContext2D, context3d: IRenderContext3D): void;
+        private _computeSceneCorrectionMatrix;
         /**
          * 阶段3: 执行前向渲染
          */
@@ -3660,66 +3970,40 @@ declare namespace Laya {
         destroy(): void;
     }
     /**
-     * Bridge3D坐标转换工具类
-     * 处理2D逻辑坐标与3D世界坐标之间的转换
+     * Bridge3D coordinate conversion helpers.
      *
-     * @remarks
-     * LayaAir的坐标系统：
-     * - Stage逻辑坐标：stage.width × stage.height（用户设置的逻辑尺寸）
-     * - Canvas渲染坐标：RenderState2D.width × RenderState2D.height（实际渲染尺寸，可能经过缩放）
-     * - 3D世界坐标：与Canvas渲染坐标对齐
-     *
-     * 当stage被缩放时（如适配不同屏幕），逻辑坐标与渲染坐标会不一致，需要转换。
+     * 2D logic coordinates are local to the owning Scene (Y-down).
+     * 3D world coordinates are Bridge3D scene-local coordinates (Y-up).
+     * Scene-to-stage offset/scale is handled by Bridge3DCamera.sceneOffsetMatrix.
      */
     class Bridge3DCoordinate {
         /**
-         * 将2D逻辑坐标转换为3D世界坐标
-         * @param x - 2D逻辑X坐标（相对于stage）
-         * @param y - 2D逻辑Y坐标（相对于stage）
-         * @param z - 3D世界Z坐标（默认0）
-         * @param out - 输出向量（可选，不提供则创建新向量）
-         * @returns 3D世界坐标
-         *
-         * @example
-         * ```typescript
-         * // Bridge3D在2D逻辑坐标(400, 300)
-         * const worldPos = Bridge3DCoordinate.logicTo3D(400, 300, 0);
-         * // worldPos现在是3D世界坐标，考虑了stage缩放
-         * ```
+         * Convert Scene-local 2D coordinates to Bridge3D scene-local world coordinates.
+         * @param x Scene-local 2D X.
+         * @param y Scene-local 2D Y.
+         * @param z 3D world Z.
+         * @param out Output vector.
+         * @param sceneHeight Scene logic height used as the Y-flip baseline.
          */
-        static logicTo3D(x: number, y: number, z?: number, out?: Vector3): Vector3;
+        static logicTo3D(x: number, y: number, z?: number, out?: Vector3, sceneHeight?: number): Vector3;
         /**
-         * 将3D世界坐标转换为2D逻辑坐标
-         * @param worldPos - 3D世界坐标
-         * @returns {x: number, y: number} 2D逻辑坐标
-         *
-         * @example
-         * ```typescript
-         * const worldPos = new Vector3(800, 600, 0);
-         * const logicPos = Bridge3DCoordinate.worldTo2D(worldPos);
-         * // logicPos.x, logicPos.y 是2D逻辑坐标
-         * ```
+         * Convert Bridge3D scene-local world coordinates to Scene-local 2D coordinates.
+         * @param worldPos Bridge3D scene-local world position.
+         * @param sceneHeight Scene logic height used as the Y-flip baseline.
          */
-        static worldTo2D(worldPos: Vector3): {
+        static worldTo2D(worldPos: Vector3, sceneHeight?: number): {
             x: number;
             y: number;
         };
         /**
-         * 获取当前的坐标缩放比例
-         * @returns {scaleX: number, scaleY: number} X和Y方向的缩放比例
-         *
-         * @remarks
-         * - scaleX = RenderState2D.width / stage.width
-         * - scaleY = RenderState2D.height / stage.height
-         * - 当stage适配屏幕时，这些值可能不为1
+         * Get current Stage scale. This is informational; Bridge3D conversion itself uses sceneOffsetMatrix.
          */
         static getScale(): {
             scaleX: number;
             scaleY: number;
         };
         /**
-         * 获取当前的渲染尺寸信息
-         * @returns 包含逻辑尺寸、渲染尺寸和缩放比例的对象
+         * Get current render and scale information for debugging.
          */
         static getRenderInfo(): {
             logicWidth: number;
@@ -3730,20 +4014,20 @@ declare namespace Laya {
             scaleY: number;
         };
         /**
-         * 将2D屏幕坐标转换为3D世界坐标（考虑相机投影）
-         * @param screenX - 屏幕X坐标（像素）
-         * @param screenY - 屏幕Y坐标（像素）
-         * @param camera - Bridge3D相机
-         * @param depth - 深度值（默认0，表示Z=0平面）
-         * @param out - 输出向量（可选）
-         * @returns 3D世界坐标
+         * Convert canvas screen coordinates to Bridge3D scene-local world coordinates.
          *
-         * @remarks
-         * 此方法用于将鼠标点击等屏幕坐标转换为3D世界坐标
+         * For orthographic cameras this maps directly through the orthographic size.
+         * For perspective Bridge3D cameras this intersects the camera ray with the target Z plane.
+         *
+         * @param screenX Canvas pixel X, origin at top-left.
+         * @param screenY Canvas pixel Y, origin at top-left.
+         * @param camera Bridge3D camera.
+         * @param depth Target world Z plane.
+         * @param out Output vector.
          */
         static screenTo3D(screenX: number, screenY: number, camera: Camera, depth?: number, out?: Vector3): Vector3;
         /**
-         * 调试输出当前坐标系统信息
+         * Print current coordinate system information.
          */
         static debugInfo(): void;
     }
@@ -5934,7 +6218,9 @@ declare namespace Laya {
     };
     /**
      * @en The `Animator` class is used to create 3D animation components.
+     *      Per-frame推进和回写均由 AnimatorManager + 工厂的 TaskSlot 接管；本类只保留对外 API + 必要状态字段。
      * @zh `Animator` 类用于创建3D动画组件。
+     *      每帧推进和数据回写由 AnimatorManager + 工厂 TaskSlot 接管，本类只保留对外 API + 必要状态字段。
      */
     class Animator extends Component {
         /**
@@ -5947,23 +6233,17 @@ declare namespace Laya {
          * @zh 裁剪模式：不可见时完全不播放动画。
          */
         static readonly CULLINGMODE_CULLCOMPLETELY: number;
-        private _speed;
-        private _keyframeNodeOwnerMap;
-        private _keyframeNodeOwners;
-        private _updateMark;
-        private _controllerLayers;
-        /** 更新模式*/
-        private _updateMode;
-        /** 降低更新频率调整值*/
-        private _lowUpdateDelty;
         private _animatorParams;
+        private _finishSleep;
+        private _manager;
+        private _cachedBindContext;
+        /** 反序列化期间 manager 未就绪时累积的 prepare state；_onEnable 时统一刷一次。 */
+        private _pendingPrepareStates;
         /**
-         * @en Culling mode，By default, when set to invisible, the animation will not play at all.
-         * @zh 裁剪模式,默认为不可见时完全不播放动画。
+         * @en Culling mode. Defaults to don't animate when not visible.
+         * @zh 裁剪模式。默认为不可见时完全不播放动画。
          */
         cullingMode: number;
-        private _finishSleep;
-        private _LateUpdateEvents;
         /**
          * @en The animation controller.
          * @zh 动画控制器。
@@ -5982,8 +6262,8 @@ declare namespace Laya {
          */
         set updateMode(value: AnimatorUpdateMode);
         /**
-         * @en Low update mode
-         * @zh 低更新模式
+         * @en Low update interval.
+         * @zh 低更新模式步长。
          */
         set lowUpdateDelty(value: number);
         /**
@@ -6009,49 +6289,12 @@ declare namespace Laya {
          * @zh 构造方法，创建动画组件。
          */
         constructor();
-        private _addKeyframeNodeOwner;
-        private _updatePlayer;
-        /**
-         * 启用过渡
-         * @param layerindex
-         * @param transition
-         * @returns
-         */
-        private _applyTransition;
-        /**
-         * @param animatorState
-         * @param playState
-         */
-        private _updateStateFinish;
-        private _updateEventScript;
-        private _eventScript;
-        /**
-         * 更新clip数据
-         */
-        private _updateClipDatas;
-        private _applyFloat;
-        private _applyVec2;
-        private _applyVec3;
-        private _applyVec4;
-        private _applyColor;
-        private _applyPositionAndRotationEuler;
-        private _applyRotation;
-        private _applyScale;
-        private _applyCrossData;
-        /**
-         * 赋值Node数据
-         * @param stateInfo 动画状态
-         * @param additive 是否为addtive
-         * @param weight state权重
-         * @param isFirstLayer 是否是第一层
-         */
-        private _setClipDatasToNode;
-        private _setCrossClipDatasToNode;
-        private _setFixedCrossClipDatasToNode;
+        private _updateDefaultValues;
         private _revertDefaultKeyframeNodes;
         protected _onEnable(): void;
+        protected _onDisable(): void;
         protected _onDestroy(): void;
-        private _applyUpdateMode;
+        private _resolveManager;
         /**
          * @en Reset the base values for additive animations. Call this when you manually modify animated properties and want the additive animation to use the new values as base.
          * @zh 重置additive动画的基础值。当手动修改了被动画控制的属性，并希望additive动画基于新值叠加时调用此方法。
@@ -6163,10 +6406,7 @@ declare namespace Laya {
         getParamsvalue(name: number): number | boolean;
         getParamsvalue(name: string): number | boolean;
         /**
-         * @deprecated 请使用animator.getControllerLayer(layerIndex).getCurrentPlayState()替换。use animator.getControllerLayer(layerIndex).getCurrentPlayState() instead
-         * 获取当前的播放状态。
-         * @param   layerIndex 层索引。
-         * @return  动画播放状态。
+         * @deprecated 请使用animator.getControllerLayer(layerIndex).getCurrentPlayState()替换。
          */
         getCurrentAnimatorPlayState(layerIndex?: number): AnimatorPlayState;
     }
@@ -6656,6 +6896,501 @@ declare namespace Laya {
          */
         cloneTo(destObject: AvatarMask): void;
     }
+    /**
+     * Preparer 接口的窄上下文：聚合 Animator 内部 worker 需要的字段，让工厂层不再 import Animator。
+     *
+     * 字段全部为引用而非拷贝；Animator 持有同一个 ctx 实例长期复用。
+     */
+    interface AnimatorBindContext {
+        /** Animator 所属的 Sprite3D。 */
+        sprite: Sprite3D;
+        /** fullPath → KeyframeNodeOwner，去重表。 */
+        ownerMap: Record<string, KeyframeNodeOwner>;
+        /** 所有去重后的 KeyframeNodeOwner 平铺列表。 */
+        owners: KeyframeNodeOwner[];
+        /** 该 Animator 所有 ControllerLayer。 */
+        layers: ReadonlyArray<AnimatorControllerLayer>;
+    }
+    /**
+     * 工厂运行时数据隔层 + 模块级注册点。
+     *
+     * - IOwnerData 是 KeyframeNodeOwner._data 的接口，Web 用 PlainOwnerData 直读字段；Native 后端
+     *   可注入 proxy 实现把字段读写转发到 native OwnerTable（高频路径应避免触发 proxy，让 native
+     *   求值直接在 native 端原地读写）。
+     * - registerOwnerDataCreator / createOwnerData：KeyframeNodeOwner 构造时取 IOwnerData 实例的
+     *   模块级 hook，避免把 factory 引用穿到无 ctor 依赖的角落。
+     * - registerClipDestroyCallback / notifyClipDestroyed：AnimationClip 销毁通知 hook，让 RT 工厂
+     *   在 clip 释放时同步清掉 native ClipTable。
+     */
+    /**
+     * 运行时 owner 数据，每帧热路径：
+     *   - Evaluator 求值后写 value
+     *   - Cross 合并器读 srcVal/dstVal 后写 value
+     *   - Applier 读 value/defaultValue 回写 Transform3D
+     */
+    interface IOwnerData {
+        /** 当前帧求值/合并结果，类型由 KeyframeNodeOwner.type 决定（Vector3 / Vec4 / Quat / number 等）。 */
+        value: any;
+        /** 默认值，updateDefaultValues 刷新；revert 时写回 Transform。 */
+        defaultValue: any;
+        /** Cross / FixedCross 用的固定 src 值。 */
+        crossFixedValue: any;
+        /** AvatarMask 预解析：当前 owner 是否激活，false 时 evaluator/applier 跳过。 */
+        maskActive: boolean;
+    }
+    type OwnerDataCreator = () => IOwnerData;
+    /** 注册 IOwnerData 实例化器，后注册者覆盖前者（典型：先 init Web 兜底，再切到 RT）。 */
+    function registerOwnerDataCreator(creator: OwnerDataCreator): void;
+    /** KeyframeNodeOwner 构造时取一个 IOwnerData 实例；未注册时回退到 PlainOwnerData。 */
+    function createOwnerData(): IOwnerData;
+    /** Web 默认实现 / 脱离工厂直接 new KeyframeNodeOwner 时的兜底。 */
+    class PlainOwnerData implements IOwnerData {
+        value: any;
+        defaultValue: any;
+        crossFixedValue: any;
+        maskActive: boolean;
+    }
+    type ClipDestroyCallback = (clipHandle: number) => void;
+    /** 注册 clip 销毁回调（RT 工厂 ctor 内注册以释放 native ClipTable），返回取消注册函数。 */
+    function registerClipDestroyCallback(fn: ClipDestroyCallback): () => void;
+    /** AnimationClip._disposeResource 调用以通知所有注册方释放对应 native 资源。 */
+    function notifyClipDestroyed(clipHandle: number): void;
+    /**
+     * AnimatorManager 的统一工厂接口。每个 Scene3D 一个实例，持有该 scene 下所有 Animator 的
+     * TaskSlot / activeList / dirtyList。
+     *
+     * 三组职责：
+     *   - 数据准备：bindAnimator / unbindAnimator / prepareStateOwners / handleSpriteOwnersBySprite /
+     *     add/removeKeyframeNodeOwner —— Animator 生命周期 + sprite 树变化时调用。
+     *   - 一帧两阶段：flushEvaluate（采样）+ flushApply（回写），Manager 每帧调一次；flushApply 末尾清 dirtyList。
+     *   - 冷路径：updateDefaultValues（additive 基础值刷新）+ revertDefaultKeyframeNodes（state 切走时还原）。
+     *
+     * 工厂自身不引用 Animator 类型，跨边界数据走 AnimatorBindContext + ITaskSlot。
+     */
+    interface IAnimatorFactory {
+        /** Animator 启用：建立 native 槽位（如有）并返回 TaskSlot 给 Animator 持有。 */
+        bindAnimator(ctx: AnimatorBindContext): ITaskSlot;
+        /** Animator 销毁：释放 slot + 从 active/dirty list 移除 + 通知 native。 */
+        unbindAnimator(ctx: AnimatorBindContext): void;
+        /** 解析 state._clip 的所有曲线，填充 state._nodeOwners。 */
+        prepareStateOwners(ctx: AnimatorBindContext, state: AnimatorState): void;
+        /** Sprite link/unlink：刷新所有 layer 上对应 path 的 nodeOwner。 */
+        handleSpriteOwnersBySprite(ctx: AnimatorBindContext, isLink: boolean, path: string[], sprite: Sprite3D): void;
+        /** 增量新增 nodeOwner（去重 + 引用计数 + propertyOwner 绑定）。 */
+        addKeyframeNodeOwner(ctx: AnimatorBindContext, clipOwners: KeyframeNodeOwner[], node: KeyframeNode, propertyOwner: any): void;
+        /** 增量移除 nodeOwner（refCount 归零时释放，nodeOwners[node._indexInList] 置 null）。 */
+        removeKeyframeNodeOwner(ctx: AnimatorBindContext, nodeOwners: (KeyframeNodeOwner | null)[], node: KeyframeNode): void;
+        /** 采样 active slot 内每个非 Idle layer 的曲线值。 */
+        flushEvaluate(): void;
+        /** 回写求值结果到目标属性；末尾清 dirtyList。 */
+        flushApply(): void;
+        /** 把 owners 的 defaultValue 刷新为当前属性值（additive 模式 loop 边界刷新）。 */
+        updateDefaultValues(owners: KeyframeNodeOwner[]): void;
+        /** 还原 state 涉及的节点到 defaultValue（state 切走时调用）。 */
+        revertDefaultKeyframeNodes(state: AnimatorState): void;
+        /** layer.avatarMask 运行时变更后刷新遮罩（可选，仅 RT 需要；Web 每帧直接读 mask）。 */
+        refreshLayerMask?(ctx: AnimatorBindContext, layer: AnimatorControllerLayer): void;
+        /** 进入 FixedCross 时把前 count 个 owner 的当前值快照为 crossFixedValue（可选，仅 RT 需要）。 */
+        saveCrossFixedValues?(owners: KeyframeNodeOwner[], count: number): void;
+        /** Scene/AnimatorManager 销毁：释放该工厂持有的所有 native 资源与运行时回调。 */
+        destroy(): void;
+    }
+    /** Position / Rotation / Scale / RotationEuler 视为 Transform 类。PathPoint 不算（目标是 LineRenderer 等非 Transform 字段）。 */
+    function isTransformType(type: KeyFrameValueType): boolean;
+    /**
+     * IAnimatorFactory 的 Native 后端。每 Scene3D 一个实例。
+     * Native 启动时通过 `AnimatorManager.factoryCreator = () => new RTAnimatorFactory()` 接管默认工厂。
+     *
+     * Preparer / Evaluator / Applier 三个 conch 全局类按存在性独立嗅探，任一缺失对应职责降级到内嵌 WebAnimatorFactory。
+     * 每帧热路径：flushEvaluate 把 active slot × layer 状态写入预分配 ArrayBuffer，单次 syncBatch 跨界。
+     */
+    class RTAnimatorFactory implements IAnimatorFactory {
+        private readonly _factoryId;
+        private readonly _web;
+        private readonly _nativePreparer;
+        private readonly _nativeEvaluator;
+        private readonly _nativeApplier;
+        /** Native 句柄分配器（连续 ID + LIFO 回收）；ID 即 native 侧 vector 下标，0 保留作"未分配"。 */
+        private readonly _slotPool;
+        private readonly _ownerPool;
+        private readonly _bindingPool;
+        private readonly _clipPool;
+        private readonly _slotHandles;
+        private readonly _ownerHandleSet;
+        private readonly _bindingHandles;
+        private readonly _clipHandles;
+        /** ctx → slotHandle，unbind 时 release 用。 */
+        private readonly _ctxToSlotHandle;
+        /** AnimationClip._id → native 侧密集 clipHandle；兼做去重，由 registerClipDestroyCallback 清理。 */
+        private readonly _clipHandleMap;
+        /** owner → ownerHandle，去重 + binding 收集 + release 用。 */
+        private readonly _ownerHandles;
+        /** ctx → (state → bindingId)，做 (ctx, state) → binding 的去重。 */
+        private readonly _bindingMap;
+        /** state → 所有它出现过的 bindingId（反向索引），revertDefaultKeyframeNodes 用。 */
+        private readonly _stateBindings;
+        /** Transform backend 嗅探结果。LayaX → 'layax'；OpenGLES → 'jsrt'；缺失则跳过 transform 绑定。 */
+        private readonly _transformBackend;
+        /** state → 该 state 内 Transform-typed owner 的 propertyOwner 去重列表，_notifyJsTransformChanged 每帧消费。 */
+        private readonly _statePropertyOwnersCache;
+        /** _notifyJsTransformChanged 的帧序号，每次调用自增；与 transform 上的 _notifyFrame 比对做整数去重。 */
+        private _notifyFrame;
+        /** 批量同步 buffer，仅在 _nativeEvaluator 存在时初始化。 */
+        private _syncBuffer;
+        private _unregisterClipDestroyCallback;
+        private _destroyed;
+        /**
+         * 初始化 RT 工厂。
+         * 步骤：
+         *   1) new 内嵌 WebAnimatorFactory 作为 non-transform 类的兜底；
+         *   2) 嗅探 conch 三件套（Preparer/Evaluator/Applier），任一存在则把 web 对应组件 scope
+         *      切到 'non-transform-only' 避免双写；缺失则保留 null；
+         *   3) 注册 IOwnerData creator（native proxy 优先，否则 PlainOwnerData）；
+         *   4) 嗅探 Transform backend（LayaX / JSRT）；
+         *   5) 注册 clip 销毁回调，释放 native ClipTable；
+         *   6) 若 evaluator 存在则创建 RTBatchSyncBuffer。
+         */
+        constructor();
+        /**
+         * Animator 启用时分配 TaskSlot；如有 native preparer 则同步在 native 端 SlotTable 建条目。
+         * 步骤：
+         *   1) Web 端 bindAnimator 拿到/复用 TaskSlot；
+         *   2) 若 preparer 存在且 ctx 还没分配 slotHandle：自增分配、记入 _ctxToSlotHandle、
+         *      通知 native uploadSlot + 首次 resizeSlot；
+         *   3) 注入 _onResize 钩子，让后续 layer 数量变化也同步 native。
+         */
+        bindAnimator(ctx: AnimatorBindContext): ITaskSlot;
+        /**
+         * Animator 销毁时清理 native 资源 + Web slot。
+         * 步骤：释放 (ctx, *) 下所有 binding/owner → release native slot → web 解绑 → 清 ctx 注册。
+         */
+        unbindAnimator(ctx: AnimatorBindContext): void;
+        /**
+         * 为 state 解析 KeyframeNodeOwner + 同步 native 资源。
+         * 步骤：
+         *   1) Web 端 prepareStateOwners 填好 state._nodeOwners；
+         *   2) 若 preparer 存在：上传 clip → 把 Transform 类 owner 补传 native → 建立 (ctx,state) 的 binding；
+         *   3) 若 applier 存在：重建该 state 的 propertyOwners 缓存（_notifyJsTransformChanged 用）。
+         */
+        prepareStateOwners(ctx: AnimatorBindContext, state: AnimatorState): void;
+        /** 把 state._nodeOwners 内所有 Transform 类 owner 首次同步给 native（按 owner 实例去重）。 */
+        private _syncOwnersToNative;
+        /**
+         * 为 (ctx, state) 在 native BindingTable 建一项，clip 与相关 owner 必须已上传。
+         * 步骤：分配 bindingId → 写入 _bindingMap + _stateBindings 反向索引 → 按 _nodeOwners 顺序
+         * 收集 ownerHandle Uint32Array → 调 native uploadBinding（与 clip.nodes 顺序对齐）。
+         */
+        private _ensureBindingUploaded;
+        /** 按 layer.avatarMask 算 per-curve mask 字节（与 ownerHandles 同序，1=激活 0=遮罩，无 mask 全 1）。 */
+        private _buildBindingMaskBytes;
+        /** 反查 state 所属 layer 的 avatarMask（无则 null）。 */
+        private _findLayerAvatarMask;
+        /**
+         * 首次见到 clip 时把整张曲线表序列化到 native；按 clip._id 去重，相同 clip 跳过。
+         * 步骤：beginUploadClip 写 clip header → 逐 curve 调 _uploadCurve（细粒度协议，避免 ArrayBuffer 编码）。
+         */
+        private _ensureClipUploaded;
+        /** 把一条 KeyframeNode 序列化到 native：先 uploadCurveHeader，再逐 keyframe 上传。 */
+        private _uploadCurve;
+        /** 按 KeyFrameValueType 选 uploadKf* 变体，把单个 keyframe 推给 native；不支持的类型跳过。 */
+        private _uploadKeyframe;
+        /**
+         * sprite link/unlink 后同步 native owner 列表与 propertyOwners 缓存。
+         * 步骤：Web 端处理 link/unlink → 遍历本 ctx 已建 binding 的所有 state，逐个补传新 owner / 重建缓存。
+         */
+        handleSpriteOwnersBySprite(ctx: AnimatorBindContext, isLink: boolean, path: string[], sprite: Sprite3D): void;
+        /**
+         * 增量绑定一个 KeyframeNodeOwner 到 (ctx, node)。
+         * 步骤：Web 端建 owner → 仅 Transform 类型才走 native → ownerHandles 按实例去重 →
+         * 首见时分配 ownerHandle，调 _uploadOwner 推送 native（header + transform 绑定 + defaultValue）。
+         */
+        addKeyframeNodeOwner(ctx: AnimatorBindContext, clipOwners: KeyframeNodeOwner[], node: KeyframeNode, propertyOwner: any): void;
+        /** 推送 owner header + 绑 native transform 实例（_nativeObj）+ 按 type 同步 defaultValue。 */
+        private _uploadOwner;
+        /**
+         * 移除 (ctx, node) 的 owner 绑定；refCount 归零时同步释放 native 资源。
+         * 步骤：Web 端 decRef + 可能从 ownerMap 删除 → 仅 Transform 且 refCount==0 + 已分配 handle 才走
+         * native 释放 → unbindOwnerTransform + releaseOwner + 清 _ownerHandles。
+         */
+        removeKeyframeNodeOwner(ctx: AnimatorBindContext, nodeOwners: (KeyframeNodeOwner | null)[], node: KeyframeNode): void;
+        private _releaseSlot;
+        private _releaseBinding;
+        private _releaseOwner;
+        private _releaseOwnerHandle;
+        private _releaseClipById;
+        private _releaseClipHandle;
+        /**
+         * 一帧求值入口。
+         * 步骤：批量同步 active slot × layer 状态到 native → 调 native flush 跑 evaluate →
+         * Web 端 flushEvaluate 处理 non-transform 类型（scope='non-transform-only' 限定）。
+         */
+        flushEvaluate(): void;
+        /**
+         * 一帧回写入口。
+         * 步骤：native applier flush 写完 Transform（并在 C++ 侧设好 WORLD 脏标志）→
+         * _notifyJsTransformChanged 派发 JS 端 TRANSFORM_CHANGED 事件 →
+         * Web 端 flushApply 处理 non-transform 类型，并清 dirtyList。
+         *
+         * WORLD 脏标志由 native applier 在 C++ 里设：_setTransformFlag 是虚函数，JSRTTransform
+         * 会同时更新 m_transformFlag 和共享内存 CHANGEFLAG，C++→C++ 无跨界。JS 侧只剩派发
+         * TRANSFORM_CHANGED 这一步——SkinnedMeshRenderer / BaseRender 的 bounds 失效靠它，
+         * C++ 那边 Transform3D listener 为 null 发不出来，所以必须留在 JS。
+         */
+        flushApply(): void;
+        /**
+         * 派发 JS 端 TRANSFORM_CHANGED 事件，驱动 SkinnedMeshRenderer / BaseRender 的 bounds 失效。
+         * 扫 active slot 内非 Idle layer 的 propertyOwner 列表，逐个 _dispatchTransformEvent 递归派发。
+         *
+         * 去重用 transform 上的 _notifyFrame 帧标记（整数比对，比 Set hash 去重快得多）：派发过即标记
+         * 为本帧序号，再遇到直接跳过；且因 _dispatchTransformEvent 返回时保证整棵子树都已派发，命中
+         * 标记时连子节点一起跳过。WORLD 脏标志已由 native applier 在 C++ 侧设好，此处只补事件派发。
+         */
+        private _notifyJsTransformChanged;
+        /**
+         * 递归派发 TRANSFORM_CHANGED：_notifyFrame 命中本帧 frame 即返回（它和整棵子树都派过了）；
+         * 否则标记本帧、派发事件、递归子节点。无 TRANSFORM_CHANGED 监听者的 transform 跳过 event
+         * 调用（_hasTransformChangedListener=false），但仍递归——子孙可能有监听者。
+         */
+        private _dispatchTransformEvent;
+        /** 重建一个 state 的 Transform-typed propertyOwner 去重列表到 _statePropertyOwnersCache（冷路径）。 */
+        private _rebuildStateTransformPropertyOwners;
+        /** layer.avatarMask 运行时变更后，重算该 layer 各 binding 的 mask 并重传 native（冷路径）。 */
+        refreshLayerMask(ctx: AnimatorBindContext, layer: AnimatorControllerLayer): void;
+        /**
+         * 进入 FixedCross 时把前 count 个 owner 的 native value 快照为 crossFixedValue（FixedCross 的 src）。
+         * JS 的 saveCrossFixedValue 只写 JS 端 PlainOwnerData，native 看不到，故这里单独同步。
+         * 冷路径，主线程、flush 并行区外调用 —— 与 mask 同写时序，多线程安全。
+         */
+        saveCrossFixedValues(owners: KeyframeNodeOwner[], count: number): void;
+        /** 把 owners 里已注册 native 的 handle 收成 Uint32Array 推给 native applier，再调 web 兜底。 */
+        updateDefaultValues(owners: KeyframeNodeOwner[]): void;
+        /** 把 state 涉及的所有 binding 在 native 端回退到 default value，配合 web 兜底覆盖 non-transform 类型。 */
+        revertDefaultKeyframeNodes(state: AnimatorState): void;
+        destroy(): void;
+    }
+    function createConchAnimatorFactory(): void;
+    /** active list 视图（FastSinglelist 的内部布局，避免反向 import）。 */
+    interface ActiveSlotList {
+        length: number;
+        elements: TaskSlot[];
+    }
+    /**
+     * 状态机字段批量同步缓冲区。
+     *
+     * 每帧 RT 工厂调 `sync(active, bindingMap)`：所有 active slot × layer 状态写入预分配的
+     * Int32/Float32 双视图 ArrayBuffer，单次 `nativeEvaluator.syncBatch` 跨界，与场景规模无关。
+     *
+     * Buffer layout（与 native AnimatorEvaluator::syncBatch 协议对齐）：
+     *   Layer record (48 bytes = 12 × 4-byte word，i32/f32 双视图共享同一 ArrayBuffer):
+     *     [0]slotHandle    [1]layerIdx       [2]type            [3]bindingId
+     *     [4]destBindingId [5]weight(f32)    [6]crossWeight(f32)[7]time(f32)
+     *     [8]destTime(f32) [9]additive       [10]frontPlay      [11]destFrontPlay
+     *   Slot record (8 bytes = 2 × i32):
+     *     [0]slotHandle    [1]hasNonIdle
+     */
+    class RTBatchSyncBuffer {
+        private static readonly LAYER_RECORD_WORDS;
+        private static readonly SLOT_RECORD_WORDS;
+        private readonly _nativeEvaluator;
+        private _layerBufferI32;
+        private _layerBufferF32;
+        private _layerBufferCapRecords;
+        private _slotBufferI32;
+        private _slotBufferCapRecords;
+        /** _computePlayTime 写入位，避免返回临时 tuple 对象。 */
+        private _ptTime;
+        private _ptFront;
+        constructor(nativeEvaluator: any);
+        /**
+         * 把 active slot × layer 的状态机字段批量推送给 native，单次 syncBatch 跨界。
+         * 步骤：
+         *   1) active 为空 → syncBatch(0, 0) 让 native 知道本帧无活跃 slot；
+         *   2) 估算总 layer record 数预扩容 buffer（不够则 ×2，永不缩）；
+         *   3) 遍历 active slot：跳过未绑定 native 的 slot；逐 layer 算 bindingId、time/frontPlay
+         *      (src + dst)、additive，按 record layout 写 i32/f32 槽位；
+         *   4) 写 slot record (slotHandle, hasNonIdle)；
+         *   5) 调 nativeEvaluator.syncBatch(buf, layerCount, slotBuf, slotCount)。
+         *
+         * 必须每帧全量同步：playState._elapsedTime 每帧都变但 TaskSlot 把 playState 当引用字段不参
+         * 与脏判定（只有 type/state/weight 等结构性字段才标 dirty）。time 由 JS 推送，只能每帧扫全。
+         */
+        sync(active: ActiveSlotList, bindingMap: WeakMap<AnimatorBindContext, Map<AnimatorState, number>>): void;
+        /** 按 web evaluator 同公式算 (curPlayTime, frontPlay) 写入 _ptTime/_ptFront；缺失输入回退 (0, true)。 */
+        private _computePlayTime;
+        /** 分配 records 条 layer record 用的 ArrayBuffer，返回 i32/f32 双视图 + capacity。 */
+        private _allocLayerBuffer;
+        /** 分配 records 条 slot record 用的 Int32Array + capacity。 */
+        private _allocSlotBuffer;
+    }
+    /**
+     * 一个 controller layer 在某一帧的任务类型。
+     * Idle 表示该 layer 本帧不做事（sleep / disable / finished + playType=0）。
+     */
+    enum LayerTaskType {
+        Idle = 0,
+        Normal = 1,
+        Cross = 2,
+        FixedCross = 3
+    }
+    /**
+     * 一个 Animator 上单层 layer 的任务数据。跨帧稳定，不重新分配。
+     *
+     * 字段分两类：
+     *   - 结构性字段（type / state / destState / weight）：参与脏判定，变化时把 slot 加入 dirtyList。
+     *   - 引用字段（playState / crossPlayState / crossWeight）：每帧覆盖，不参与脏判定 ——
+     *     native 自己读这些对象 / 自己推时间，JS 不需要每帧同步给 native。
+     */
+    class LayerTask {
+        type: LayerTaskType;
+        state: AnimatorState | null;
+        destState: AnimatorState | null;
+        weight: number;
+        playState: AnimatorPlayState | null;
+        crossPlayState: AnimatorPlayState | null;
+        crossWeight: number;
+    }
+    /**
+     * Manager 在 tickOne 内通过这个接口提交本帧 layer 状态。
+     * 工厂在 bindAnimator 时分配实现实例并返回给 Animator 持有。
+     */
+    interface ITaskSlot {
+        /** 该 layer 本帧不做事。 */
+        submitLayerIdle(layerIndex: number): void;
+        /** 提交常规任务。weight 由 caller 显式给出（fixedCross 完成那帧强制 1.0）。 */
+        submitLayerNormal(layerIndex: number, state: AnimatorState, playState: AnimatorPlayState, weight: number): void;
+        /** 提交动态交叉融合任务。 */
+        submitLayerCross(layerIndex: number, srcState: AnimatorState, srcPlayState: AnimatorPlayState, destState: AnimatorState, destPlayState: AnimatorPlayState, crossWeight: number): void;
+        /** 提交固定交叉融合任务（src 来自 crossFixedValue，不需要 srcState/srcPlayState）。 */
+        submitLayerFixedCross(layerIndex: number, destState: AnimatorState, destPlayState: AnimatorPlayState, crossWeight: number): void;
+        /** Animator 级 skip 时调用：所有 layer 一次性置 Idle，slot 出 activeList。 */
+        submitAllIdle(): void;
+        /** addControllerLayer / removeControllerLayer 时由 Animator 通知更新 layers 数组长度。 */
+        resizeLayers(count: number): void;
+    }
+    /**
+     * Animator 对应的任务槽。一个 Animator 一个 slot，跨帧稳定。
+     *
+     * Slot 内部维护 `_layers: LayerTask[]`（长度 = animator.controllerLayerCount），以及 `_activeLayerCount`
+     * （非 Idle 的 layer 数量）。Slot 自身持有 factory 的 activeList / dirtyList 引用，submit 内部直接维护。
+     *
+     * - activeList 跨帧维护：slot 至少一个 layer 非 Idle 时入列；全 Idle 时出列。
+     * - dirtyList 跨帧维护：本帧结构性字段变化时入列；flushApply 末尾清空。
+     */
+    class TaskSlot implements ITaskSlot {
+        private readonly _activeList;
+        private readonly _dirtyList;
+        constructor(ctx: AnimatorBindContext, activeList: FastSinglelist<TaskSlot>, dirtyList: FastSinglelist<TaskSlot>);
+        resizeLayers(count: number): void;
+        submitAllIdle(): void;
+        submitLayerIdle(layerIndex: number): void;
+        submitLayerNormal(layerIndex: number, state: AnimatorState, playState: AnimatorPlayState, weight: number): void;
+        submitLayerCross(layerIndex: number, srcState: AnimatorState, srcPlayState: AnimatorPlayState, destState: AnimatorState, destPlayState: AnimatorPlayState, crossWeight: number): void;
+        submitLayerFixedCross(layerIndex: number, destState: AnimatorState, destPlayState: AnimatorPlayState, crossWeight: number): void;
+        private _markDirty;
+        private _syncListMembership;
+    }
+    /** RT 路径下复用 Web applier 时，'non-transform-only' 跳过 Transform 类型让 Native 处理。 */
+    type WebAnimatorApplierScope = 'all' | 'non-transform-only';
+    /**
+     * Animator 数据回写的 Web 实现（WebAnimatorFactory 内部 helper）。
+     * factory 在 flushApply 时遍历 activeList，逐 layer 按 type 调对应 apply*。
+     */
+    class WebAnimatorApplier {
+        _scope: WebAnimatorApplierScope;
+        private _currentUpdateMark;
+        /**
+         * clip → 非 Transform curve 的索引桶。scope='non-transform-only' 时让 _applyNormal /
+         * revertDefaultKeyframeNodes 用桶替代「全表扫描 + 内层 isTransformType 判断」。
+         * Clip 是只读资源，桶一次构建后稳定。'all' 路径不使用桶。
+         */
+        private _nonTransformIdxCache;
+        /** 取 clip 的非 Transform 索引桶，缺则按 clip._nodes 构建并缓存。 */
+        private _getNonTransformIndices;
+        applyNormal(layerTask: LayerTask, controllerLayer: AnimatorControllerLayer, isFirstLayer: boolean, updateMark: number): void;
+        applyCross(layerTask: LayerTask, controllerLayer: AnimatorControllerLayer, isFirstLayer: boolean, updateMark: number): void;
+        applyFixedCross(layerTask: LayerTask, controllerLayer: AnimatorControllerLayer, isFirstLayer: boolean, updateMark: number): void;
+        updateDefaultValues(owners: KeyframeNodeOwner[]): void;
+        revertDefaultKeyframeNodes(state: AnimatorState): void;
+        private _applyNormal;
+        private _applyCross;
+        private _applyFixedCross;
+        private _applyFloat;
+        private _applyVec2;
+        private _applyVec3;
+        private _applyVec4;
+        private _applyColor;
+        private _applyPositionAndRotationEuler;
+        private _applyRotation;
+        private _applyScale;
+        private _applyCrossData;
+    }
+    /** RT 路径下复用 Web evaluator 时，用 'non-transform-only' 跳过 Transform 类型让 Native 专门处理。 */
+    type WebAnimatorEvaluatorScope = 'all' | 'non-transform-only';
+    /**
+     * Animator 数据处理的 Web 默认实现（WebAnimatorFactory 内部 helper）。
+     * 无内部状态/队列；factory 在 flushEvaluate 时遍历 activeList，逐 layer 调 `evaluateLayer`。
+     */
+    class WebAnimatorEvaluator {
+        _scope: WebAnimatorEvaluatorScope;
+        evaluateLayer(layerTask: LayerTask, controllerLayer: AnimatorControllerLayer): void;
+        private _sample;
+    }
+    /**
+     * IAnimatorFactory 的 Web 默认实现，每 Scene3D 一个实例。
+     *
+     * 组合 evaluator / applier 两个 helper（preparer 是 module-level functions，无 instance）。
+     * Slot 模型：bindAnimator 分配 TaskSlot；flushEvaluate / flushApply 遍历 activeList 全量；flushApply 末尾清 dirtyList。
+     */
+    class WebAnimatorFactory implements IAnimatorFactory {
+        private readonly _slotMap;
+        constructor();
+        bindAnimator(ctx: AnimatorBindContext): ITaskSlot;
+        unbindAnimator(ctx: AnimatorBindContext): void;
+        prepareStateOwners(ctx: AnimatorBindContext, state: AnimatorState): void;
+        handleSpriteOwnersBySprite(ctx: AnimatorBindContext, isLink: boolean, path: string[], sprite: Sprite3D): void;
+        addKeyframeNodeOwner(ctx: AnimatorBindContext, clipOwners: KeyframeNodeOwner[], node: KeyframeNode, propertyOwner: any): void;
+        removeKeyframeNodeOwner(ctx: AnimatorBindContext, nodeOwners: (KeyframeNodeOwner | null)[], node: KeyframeNode): void;
+        /** 遍历 activeList 全量调 evaluator.evaluateLayer。 */
+        flushEvaluate(): void;
+        /**
+         * 遍历 activeList，按 LayerTask.type 分派到 applier.applyNormal/applyCross/applyFixedCross，末尾清 dirtyList。
+         */
+        flushApply(): void;
+        private _clearDirty;
+        updateDefaultValues(owners: KeyframeNodeOwner[]): void;
+        revertDefaultKeyframeNodes(state: AnimatorState): void;
+        destroy(): void;
+    }
+    /**
+     * Animator 数据准备的 Web 实现，全部为 module-level 无状态函数。
+     * 所有入口接受 AnimatorBindContext 作窄上下文，不依赖 Animator 本体；ownerMap / ownerList 共享在 ctx 里。
+     */
+    /**
+     * 增量绑定一个 KeyframeNodeOwner 到 ctx。
+     * 步骤：
+     *   1) 命中 ownerMap[fullPath] → refCount++ 复用；
+     *   2) 否则沿 node.property 链解析到目标对象（Material 分支走 shaderData getX）；
+     *   3) 新建 KeyframeNodeOwner，填字段、按 type 分配 defaultValue/value/crossFixedValue；
+     *   4) 写入 ownerMap、ownerList、clipOwners[nodeIndex]。
+     */
+    function addKeyframeNodeOwner(ctx: AnimatorBindContext, clipOwners: KeyframeNodeOwner[], node: KeyframeNode, propertyOwner: any): void;
+    /** decRef 一个 owner；refCount==0 时从 ownerMap/ownerList 删除，并把 nodeOwners[node._indexInList] 置 null。 */
+    function removeKeyframeNodeOwner(ctx: AnimatorBindContext, nodeOwners: (KeyframeNodeOwner | null)[], node: KeyframeNode): void;
+    /**
+     * 解析 state._clip 的每条曲线到 state._nodeOwners。
+     * 步骤：
+     *   1) 把 state._nodeOwners 长度设为 frameNodes.count；
+     *   2) 逐 node：沿 nodePath 在 sprite 树里 getChild 定位 propertyOwner；
+     *   3) 若 node.propertyOwner（指定属性名）非空，再读一层；缺失则回退 AnimatorResource 注册表；
+     *   4) 调 addKeyframeNodeOwner 建/复用 owner。
+     */
+    function prepareStateOwners(ctx: AnimatorBindContext, clipStateInfo: AnimatorState): void;
+    /**
+     * Sprite link/unlink 时，刷新所有 layer 上该 path 对应的 nodeOwner。
+     * 步骤：遍历每个 enable 的 controllerLayer 的所有 state，在其 clip._nodesMap 里查 path 对应的
+     * KeyframeNode 集合，逐个 add/removeKeyframeNodeOwner。
+     */
+    function handleSpriteOwnersBySprite(ctx: AnimatorBindContext, isLink: boolean, path: string[], sprite: Sprite3D): void;
     enum KeyFrameValueType {
         None = -1,
         Float = 0,
@@ -6670,6 +7405,76 @@ declare namespace Laya {
         Boolean = 9,
         PathPoint = 10,
         MaterialRef = 11
+    }
+    /**
+     * Scene3D 级 Animator 管理器。
+     *
+     * 每帧分两阶段：
+     *   阶段 1 — `tickOne` 推进状态机（time / transition / event）并把本帧 layer 任务提交到工厂的 TaskSlot；
+     *           slot 内部做脏判定 + 维护 activeList / dirtyList。
+     *   阶段 2 — `factory.flushEvaluate` + `factory.flushApply` 批处理；
+     *           `drainPendingSwitches` 处理 cross-fade 完成的状态切换通知；
+     *           最后 invoke 所有 animator 的 `_LateUpdateEvents`（transition 触发的 crossFade）。
+     *
+     * 工厂实例 per-AnimatorManager（即 per-Scene3D）。Native 启动序列覆盖
+     * `AnimatorManager.factoryCreator = () => new RTAnimatorFactory()` 以注入 Native 后端。
+     */
+    class AnimatorManager implements IElementComponentManager {
+        static __managerName: string;
+        /**
+         * 工厂注入点：Native 启动序列覆盖。
+         *
+         * **必须在 `Laya.init` 之前覆盖，且只覆盖一次** —— Scene3D 创建时同步实例化 AnimatorManager 并锁定工厂，
+         * 之后覆盖对已有 scene 无效。多 scene 场景下所有 scene 共享同一种工厂（不支持 per-scene 不同后端）。
+         */
+        static factoryCreator: () => IAnimatorFactory;
+        name: string;
+        private _activeAnimators;
+        private _pendingSwitches;
+        constructor();
+        Init(_data: any): void;
+        update(_dt: number): void;
+        destroy(): void;
+        /**
+         * 单个 Animator 的逐帧推进。
+         * 步骤：
+         *   1) 取 delta 并按 updateMode 调整（LowFrame 抽帧 / UnScaleTime 等）；
+         *   2) speed=0 / delta=0 / Stat 关闭 → 全 layer 置 Idle 并提前返回；
+         *   3) bump slot._updateMark（applier 同帧多 layer 合并要用）；
+         *   4) 遍历 controllerLayers：disable 或 sleep+finished+playType==0 → Idle；
+         *      否则按 _playType 分派给 _tickPlayTypeNormal / Cross / FixedCross。
+         */
+        tickOne(animator: Animator): void;
+        /**
+         * playType=0：正常播放一个 state。
+         * 步骤：state 已 finish → 触发 transition 判定（可能引发 LateUpdate crossFade）；未 finish → _updatePlayer
+         * 推 time + event + state-finish 事件；提交 Normal layer 任务。
+         */
+        private _tickPlayTypeNormal;
+        /**
+         * playType=1：动态交叉融合（cross）。
+         * 步骤：按 crossDuration 推 destState 的 time；算 crossWeight；
+         *   - crossWeight ≥ 1 → 提交为完成态 Normal layer + 入 pendingSwitches 等 flush 后切换；
+         *   - 否则 src 还未 finish 也要推 src 的 time；提交 Cross layer 任务；
+         * 末尾刷新两个 state 的 event / state-finish。
+         */
+        private _tickPlayTypeCross;
+        /**
+         * playType=2：固定交叉融合（fixed-cross，src 取 owner.crossFixedValue）。
+         * 步骤：按 crossDuration 推 destState 的 time；算 crossWeight；
+         *   - crossWeight ≥ 1 → 提交完成态 Normal layer（weight 强制 1.0，非 controllerLayer.defaultWeight）+ 入 pendingSwitches；
+         *   - 否则提交 FixedCross layer 任务；
+         * 末尾刷新 destState 的 event / state-finish。
+         */
+        private _tickPlayTypeFixedCross;
+        private _drainPendingSwitches;
+        private _drainLateUpdates;
+        private _applyUpdateMode;
+        private _updatePlayer;
+        private _applyTransition;
+        private _updateStateFinish;
+        private _updateEventScript;
+        private _eventScript;
     }
     /**
      * @en HLOD (Hierarchical Level of Detail) component for optimizing rendering performance.
@@ -7435,6 +8240,7 @@ declare namespace Laya {
          * @zh 场景反射探针
          */
         get sceneReflectionProbe(): ReflectionProbe;
+        hasUserProbe(): boolean;
         set sceneReflectionProbe(value: ReflectionProbe);
         /**
          * @en Update the reflection probe for the base render.
@@ -7588,6 +8394,7 @@ declare namespace Laya {
          * @zh 将运动对象添加到处理列表中。
          */
         addMotionObject(renderObj: BaseRender): void;
+        needUpdateMotionObject(renderObj: BaseRender): boolean;
         /**
          * @en Remove a motion object from the handle list.
          * @zh 从处理列表中移除运动对象。
@@ -11682,6 +12489,7 @@ declare namespace Laya {
     class Scene3D extends Sprite {
         private static _lightTexture;
         private static _lightPixles;
+        private static _layaxActiveCameraHandles;
         /**Scene3D UniformMap */
         static sceneUniformMap: CommandUniformMap;
         /**
@@ -11905,6 +12713,7 @@ declare namespace Laya {
          * @zh 渲染入口
          */
         renderSubmit(): void;
+        protected _prepareLayaXActiveCameras(): void;
         /**
          * @en Sets a global shader value for rendering.
          * @param name The name corresponding to the shader.
@@ -11934,6 +12743,12 @@ declare namespace Laya {
          * @returns 获取光照贴图浅拷贝列表。
          */
         getlightmaps(): Texture2D[];
+    }
+    /**
+     * @en The collection of scene shader macros.
+     * @zh 场景宏集合
+     */
+    class Scene3DShaderDeclaration {
     }
     /**
      * @en The class is used to implement scene rendering node management.
@@ -12265,6 +13080,8 @@ declare namespace Laya {
         constructor(name?: string, isStatic?: boolean);
         protected _onActive(): void;
         protected _onInActive(): void;
+        protected _onActiveInScene(): void;
+        protected _onInActiveInScene(): void;
         protected _onAdded(): void;
         protected _onRemoved(): void;
         protected onStartListeningToType(type: string): void;
@@ -12885,6 +13702,32 @@ declare namespace Laya {
          * @zh 销毁此索引缓冲。
          */
         destroy(): void;
+    }
+    class Cluster {
+        static instance: Cluster;
+        private _xSlices;
+        private _ySlices;
+        private _zSlices;
+        private _clusterDatas;
+        private _clusterPixels;
+        private _updateMark;
+        private _depthSliceParam;
+        _clusterTexture: Texture2D;
+        constructor(xSlices: number, ySlices: number, zSlices: number, maxLightsPerClusterAverage: number);
+        private _placePointLightToClusters;
+        private _placeSpotLightToClusters;
+        private _insertConePlane;
+        private _shrinkSphereLightZPerspective;
+        private _shrinkSpotLightZPerspective;
+        private _shrinkSphereLightByBoundOrth;
+        private _shrinkSpotLightByBoundOrth;
+        private _shrinkXYByRadiusPerspective;
+        private _shrinkSpotXYByConePerspective;
+        private _updatePointLightPerspective;
+        private _updateSpotLightPerspective;
+        private _updatePointLightOrth;
+        private _updateSpotLightOrth;
+        update(camera: Camera, scene: Scene3D): void;
     }
     /**
      * @en Second-order spherical harmonics function.
@@ -15920,6 +16763,8 @@ declare namespace Laya {
         private _color;
         /**是否开启快速模式。该模式通过降低质量来提升性能。*/
         private _fastMode;
+        /**泛光金字塔的相对质量系数,1.0 = 与旧版一致(半分辨率起步),0.5 = 1/4 分辨率(省带宽),2.0 = 全分辨率(高质量)。*/
+        private _resolutionScale;
         /**镜头污渍纹路,用于为泛光特效增加污渍灰尘效果*/
         private _dirtTexture;
         /**
@@ -15982,6 +16827,12 @@ declare namespace Laya {
          */
         get dirtIntensity(): number;
         set dirtIntensity(value: number);
+        /**
+         * @en Relative quality scale of the bloom pyramid. 1.0 (default) matches the legacy half-resolution behavior. Set to 0.5 to start the pyramid at quarter resolution, saving approximately 3/4 of bloom processing bandwidth at the cost of more visible blur and aliasing. Set to 2.0 to start at full resolution (highest quality, highest cost). Clamped to [0.125, 2.0]. The actual pyramid base size is approximately `viewport * scale / 2`.
+         * @zh 泛光金字塔的相对质量系数。1.0（默认）等价于旧版半分辨率行为。设为 0.5 时金字塔从 1/4 分辨率开始构建,约可节省 3/4 的泛光处理带宽,代价是模糊更明显、可能出现更多锯齿。设为 2.0 时从全分辨率起步(质量最高、开销最大)。取值范围 [0.125, 2.0]。金字塔起始尺寸约为 `viewport × scale / 2`。
+         */
+        get resolutionScale(): number;
+        set resolutionScale(value: number);
         /**
          * @en initializate the bloom effect instance.
          * @zh 初始化泛光效果实例。
@@ -17119,6 +17970,7 @@ declare namespace Laya {
          * @return 创建的网格实例。
          */
         static createQuad(long?: number, width?: number): Mesh;
+        static createTriangle(long?: number, width?: number): Mesh;
         /**
          * @en Creates a sphere mesh.
          * @param radius The radius of the sphere. Default is 0.5.
@@ -23632,6 +24484,7 @@ declare namespace Laya {
      */
     class Render2DProcessor {
         static rendercontext2D: IRenderContext2D;
+        static renderTime: number;
         static runner: GraphicsRunner;
         static __init__(): void;
         private _manager;
@@ -23652,7 +24505,7 @@ declare namespace Laya {
          * 渲染所有 Pass
          * @param context2D 2D 渲染上下文
          */
-        apply(context2D: IRenderContext2D): void;
+        apply(context2D: IRenderContext2D, renderTime?: number): void;
         /**
          * 清空所有 Pass
          */
@@ -23666,6 +24519,7 @@ declare namespace Laya {
     interface IBridge3DData {
         cameraZDistance: number;
         cameraFarPlane: number;
+        orthographicCamera?: boolean;
         readonly scene3dSettings: Record<string, any>;
         readonly cameraSettings: Record<string, any>;
     }
@@ -24524,6 +25378,7 @@ declare namespace Laya {
          * @param offsetScale offset and scale Value,(Based on percentage)
          * @param shader use shader
          * @param shaderData data for shader
+         * @param invert data for geomerty invert uv
          * @returns render command
          * @zh 创建一个纹理拷贝渲染指令
          * @param source 拷贝原图
@@ -24531,9 +25386,10 @@ declare namespace Laya {
          * @param offsetScale 偏移缩放（基于百分比）
          * @param shader 拷贝使用Shader
          * @param shaderData 拷贝使用的shader对应的渲染数据
+         * @param shaderData 拷贝使用的geometry 是否翻转uv
          * @returns 渲染指令
          */
-        static create(source: BaseTexture, dest: IRenderTarget, offsetScale?: Vector4, shader?: Shader3D, shaderData?: ShaderData): Blit2DCMD;
+        static create(source: BaseTexture, dest: IRenderTarget, offsetScale?: Vector4, shader?: Shader3D, shaderData?: ShaderData, invert?: boolean): Blit2DCMD;
         private _source;
         private _dest;
         private _offsetScale;
@@ -24685,8 +25541,9 @@ declare namespace Laya {
          * @param offsetScale offset&scale of copy
          * @param shader copy use shader
          * @param shaderData copy use data for shader
+         * @param invert copy use geomerty invert uv
          */
-        blitTextureQuad(source: BaseTexture, dest: IRenderTarget, offsetScale?: Vector4, shader?: Shader3D, shaderData?: ShaderData): void;
+        blitTextureQuad(source: BaseTexture, dest: IRenderTarget, offsetScale?: Vector4, shader?: Shader3D, shaderData?: ShaderData, invert?: boolean): void;
         blitTextureBlur(source: BaseTexture, dest: IRenderTarget, blurParams: any): void;
         /**
          * 设置渲染目标指令
@@ -24840,6 +25697,133 @@ declare namespace Laya {
     class Scene2DSpecialManager {
         static SPRITE2DGLOBAL: ShaderDefine;
         constructor();
+    }
+    class SequenceFrame2DRender extends BaseRenderNode2D {
+        static defaultMaterial: Material;
+        /**
+         * Instance data lives in class-level expandable buffers. Enabled components
+         * own one instance ID, and their local runtime/config arrays are views into
+         * the matching slice. Batch assembly can then copy large contiguous ranges
+         * instead of gathering many tiny per-renderer arrays.
+         */
+        private static _instanceCapacity;
+        private static _nextInstanceID;
+        private static _freeInstanceIDs;
+        private static _activeRenderers;
+        private static _runtimeDataBuffer;
+        private static _configDataBuffer;
+        static __init__(): void;
+        private static _allocateInstanceID;
+        private static _releaseInstanceID;
+        private static _ensureInstanceCapacity;
+        readonly owner: Sprite;
+        private _cycles;
+        private _tiles;
+        private _startFrame;
+        private _lifeTime;
+        private _playOnAwake;
+        private _loop;
+        private _autoDestroyAtComplete;
+        private _unitPixels;
+        private _color;
+        private _texture;
+        private _baseRender2DTexture;
+        private _textureUVRect;
+        private _elapsedTime;
+        private _startTime;
+        private _playing;
+        private _paused;
+        private _needRuntimeUpload;
+        private _needConfigUpload;
+        private _configVersion;
+        private _instanceID;
+        private _lastMatrix;
+        private _lastAlpha;
+        private _renderGeometry;
+        private _runtimeVertexBuffer;
+        private _configVertexBuffer;
+        private _runtimeBufferData;
+        private _configBufferData;
+        private _activeInstanceCount;
+        get cycles(): number;
+        set cycles(value: number);
+        get tiles(): Vector2;
+        set tiles(value: Vector2);
+        get startFrame(): number;
+        set startFrame(value: number);
+        get lifeTime(): number;
+        set lifeTime(value: number);
+        get playOnAwake(): boolean;
+        set playOnAwake(value: boolean);
+        get loop(): boolean;
+        set loop(value: boolean);
+        get autoDestroyAtComplete(): boolean;
+        set autoDestroyAtComplete(value: boolean);
+        get unitPixels(): number;
+        set unitPixels(value: number);
+        get color(): Color;
+        set color(value: Color);
+        get texture(): BaseTexture | Texture;
+        set texture(value: BaseTexture | Texture);
+        get isPlaying(): boolean;
+        get sharedMaterial(): Material;
+        set sharedMaterial(value: Material);
+        private _ensureInstanceID;
+        private _releaseInstanceID;
+        private _bindInstanceDataViews;
+        private _setInstanceActive;
+        constructor();
+        protected _getElementMaterial(index: number): Material;
+        protected _isMaterialVaild(value: Material): boolean;
+        protected _getcommonUniformMap(): Array<string>;
+        protected _initDefaultRenderData(): void;
+        play(restart?: boolean): void;
+        pause(): void;
+        resume(): void;
+        stop(resetFrame?: boolean): void;
+        renderUpdate(_context: IRenderContext2D): void;
+        onEnable(): void;
+        onDisable(): void;
+        onDestroy(): void;
+        _cloneTo(dest: SequenceFrame2DRender): void;
+        private _markRuntimeDirty;
+        private _markConfigDirty;
+        private _getCurrentTime;
+        private _getPlaybackAge;
+        private _completePlayback;
+        private _isRuntimeStateDirty;
+        private _initRender;
+        private _resizeInstanceBuffers;
+        private _applyTextureToShaderData;
+        private _updateRuntimeData;
+        private _updateConfigData;
+    }
+    /**
+     * @en Vertex attribute locations for the SequenceFrame2D shader.
+     * @zh SequenceFrame2D Shader 的顶点属性位置。
+     */
+    enum SequenceFrame2DVertex {
+        PositionUV = 0,
+        Matrix0 = 1,
+        Matrix1 = 2,
+        Runtime = 3,
+        Playback = 4,
+        SizeTiles = 5,
+        ColorUnit = 6,
+        UVRect = 7
+    }
+    /**
+     * @en Registers the shader and shared geometry declarations for 2D sequence frames.
+     * @zh 注册 2D 序列帧的 Shader 与共享网格声明。
+     */
+    class SequenceFrame2DShader {
+        /** @en Whether shader resources have been registered. @zh Shader 资源是否已注册。 */
+        private static _inited;
+        /**
+         * @en Registers the shader and shared quad buffers.
+         * @zh 注册 Shader 与共享四边形缓冲。
+         */
+        static __init__(): void;
     }
     /**
      * @en Sprite is a basic display list node for displaying graphical content. By default, Sprite does not accept mouse events. Through the graphics API, images or vector graphics can be drawn, supporting operations like rotation, scaling, translation, and more. Sprite also functions as a container class, allowing the addition of multiple child nodes.
@@ -25624,7 +26608,7 @@ declare namespace Laya {
          * @en Repaint the parent node. When `cacheAs` is enabled, set all parent object caches to invalid.
          * @zh 重新绘制父节点。启用 `cacheAs` 时，设置所有父对象缓存失效。
          */
-        parentRepaint(): void;
+        parentRepaint(repaintPass?: boolean): void;
         /**
          * @en Get the drag support object.
          * @return The drag support object (DragSupport).
@@ -25660,6 +26644,7 @@ declare namespace Laya {
         onAfterDeserialize(): void;
         protected onStartListeningToType(type: string): void;
         private setDemandTransEventUp;
+        private _processChildrenVisible;
         /**
          * @ignore
          */
@@ -25744,7 +26729,8 @@ declare namespace Laya {
         particle = 2,
         spineSimple = 3,
         graphics = 4,
-        spinenormal = 5
+        spinenormal = 5,
+        sequenceFrame2D = 6
     }
     enum SubPassFlag {
         PostProcess = 1,
@@ -30086,17 +31072,18 @@ declare namespace Laya {
         addTexturesByUrl(urls: string[], scale?: number, largeTextureIndex?: number): number;
         /**
          * @en Remove texture from atlas
-         * @param textureId textureId to remove
+         * @param texture texture to remove or textureId to remove
          * @param largeTextureIndex largeTextureIndex to remove
          * @param event event to remove
          * @returns boolean whether remove texture from atlas successfully
          * @zh 从图集中移除纹理
-         * @param textureId 纹理ID
+         * @param texture 纹理或纹理ID
          * @param largeTextureIndex 大纹理索引，-1表示从所有大纹理中移除
          * @param event 是否触发事件，默认true
          * @returns 是否移除成功
          */
-        removeTexture(textureId: number, largeTextureIndex?: number, event?: boolean): boolean;
+        removeTexture(texture: Texture | number, largeTextureIndex?: number, event?: boolean): boolean;
+        removeByTexture2DId(texture2DId: number, largeTextureIndex?: number, event?: boolean): boolean;
         /**
          * @en Remove texture from atlas by url
          * @param url url of texture to remove
@@ -46810,19 +47797,47 @@ declare namespace Laya {
         /**绘制需要使用的材质 */
         private _material;
         private _cmdBuffer;
+        private _meshAccums;
+        private _lineAccums;
         private _cmdDrawLineList;
         private _linePointsList;
         private _cmdDrawMeshList;
         private _meshList;
         constructor();
+        private _colorToKey;
+        private _getMeshAccum;
+        private _getLineAccum;
         setActive(value: boolean): void;
+        /**
+         * Append circle vertices into the per-color mesh accumulator.
+         */
+        appendCircle(cx: number, cy: number, radius: number, color: Color, numSegments?: number): void;
+        /**
+         * Append convex polygon vertices into the per-color mesh accumulator.
+         * @param points flat array [x0,y0, x1,y1, ...]
+         */
+        appendPolygon(points: number[], pointCount: number, color: Color): void;
+        /**
+         * Append a single line segment into the per-color line accumulator.
+         */
+        appendLineSegment(x1: number, y1: number, x2: number, y2: number, color: Color): void;
+        /**
+         * Append multiple line segments into the per-color line accumulator.
+         * @param points flat array [x1,y1,x2,y2, x3,y3,x4,y4, ...] (multiples of 4)
+         */
+        appendLinePoints(points: number[], color: Color): void;
+        private static readonly _RETAIN_FRAMES;
+        private _pendingMeshCmdRing;
+        private _pendingMeshRing;
+        private _pendingLineCmdRing;
         private render;
         /**
-         * 根据多边形顶点生成Mesh2D，不添加中心点
-         * @param vertices 多边形顶点数组 [x1, y1, x2, y2, ...]
-         * @returns 生成的Mesh2D对象
+         * Create a Mesh2D from polygon vertices (legacy, prefer appendPolygon).
          */
         createMesh2DByVertices(vertices: any[]): Mesh2D;
+        /**
+         * Create a Mesh2D from circle parameters (legacy, prefer appendCircle).
+         */
         createCircleMeshByVertices(center: {
             x: number;
             y: number;
@@ -47119,6 +48134,8 @@ declare namespace Laya {
         private _worldPreTriggerCallback;
         private _worldPostTriggerCallback;
         private _worldContactCallback;
+        private _tempColor;
+        private _tempPoints;
         private _makeStyleString;
         private _enableBox2DDraw;
         private _debugDrawSegment;
@@ -56147,6 +57164,1935 @@ declare namespace Laya {
          */
         protected static _typeArray(type: string): Float32ArrayConstructor | Int32ArrayConstructor;
     }
+    class LayaXSetRendertarget2DCMD extends SetRendertarget2DCMD {
+        _nativeObj: any;
+        constructor();
+        get rt(): InternalRenderTarget;
+        set rt(value: InternalRenderTarget);
+        get clearColor(): boolean;
+        set clearColor(value: boolean);
+        get clearColorValue(): Color;
+        set clearColorValue(value: Color);
+        get invertY(): boolean;
+        set invertY(value: boolean);
+        get viewportX(): number;
+        set viewportX(value: number);
+        get viewportY(): number;
+        set viewportY(value: number);
+        apply(_context: IRenderContext2D): void;
+    }
+    class LayaXDraw2DElementCMD extends Draw2DElementCMD {
+        _nativeObj: any;
+        constructor();
+        setRenderelements(value: IRenderElement2D[]): void;
+        apply(_context: IRenderContext2D): void;
+    }
+    class LayaXBlit2DQuadCMD extends Blit2DQuadCMD {
+        _nativeObj: any;
+        constructor();
+        get element(): IRenderElement2D;
+        set element(value: IRenderElement2D);
+        get dest(): InternalRenderTarget;
+        set dest(value: InternalRenderTarget);
+        get source(): InternalTexture;
+        set source(value: InternalTexture);
+        get offsetScale(): Vector4;
+        set offsetScale(value: Vector4);
+        apply(_context: IRenderContext2D): void;
+    }
+    class LayaXPrimitiveRenderElement2D extends LayaXRenderElement2D implements IPrimitiveRenderElement2D {
+        private _typeKey;
+        private _textureKey;
+        protected init(): void;
+        /**
+         * @en Type key proxied to native object's type field.
+         * @zh 类型键代理到原生对象的 type 字段。
+         */
+        set typeKey(value: number);
+        get typeKey(): number;
+        /**
+         * @en Texture key encoding shader define bits + texture ID. Proxied to native.
+         * @zh 纹理键编码着色器宏定义位和纹理ID。代理到原生对象。
+         */
+        set textureKey(value: number);
+        get textureKey(): number;
+        protected _pickMaterialSD(): LayaXShaderData | null;
+        private _primitiveShaderData;
+        get primitiveShaderData(): ShaderData;
+        set primitiveShaderData(data: ShaderData);
+        destroy(): void;
+    }
+    class LayaXRender2DProcess implements I2DRenderPassFactory {
+        createRenderElement2D(): IRenderElement2D;
+        createPrimitiveRenderElement2D(): IPrimitiveRenderElement2D;
+        createRenderContext2D(): IRenderContext2D;
+        createBlit2DQuadCMDData(): Blit2DQuadCMD;
+        createDraw2DElementCMDData(): Draw2DElementCMD;
+        createSetRendertarget2DCMD(): SetRendertarget2DCMD;
+        createSetRenderDataCMD(): SetRenderDataCMD;
+        createSetShaderDefineCMD(): SetShaderDefineCMD;
+        createRender2DPass(): IRender2DPass;
+        createRenderStruct2D(): IRenderStruct2D;
+        createRender2DPassManager(): IRender2DPassManager;
+        create2DGlobalRenderDataHandle(): I2DGlobalRenderData;
+        create2D2DPrimitiveDataHandle(): I2DPrimitiveDataHandle;
+        create2DBaseRenderDataHandle(): I2DBaseRenderDataHandle;
+        createMesh2DRenderDataHandle(): IMesh2DRenderDataHandle;
+        createSpineRenderDataHandle(): ISpineRenderDataHandle;
+        create2DGraphicVertexDataView(wholeBuffer: I2DGraphicWholeBuffer, elementOffset: number, elementSize: number, stride: number): I2DGraphicVertexDataView;
+        create2DGraphicIndexDataView(wholeBuffer: I2DGraphicWholeBuffer, elementSize: number): I2DGraphicIndexDataView;
+        create2DGraphicVertexBuffer(): I2DGraphicWholeBuffer;
+        create2DGraphicIndexBuffer(): I2DGraphicWholeBuffer;
+        createGraphic2DBufferBlock(): IGraphics2DBufferBlock;
+        createGraphic2DVertexBlock(): IGraphics2DVertexBlock;
+        createEmptyRenderDataHandle(): IRender2DDataHandle;
+    }
+    class LayaXRenderContext2D implements IRenderContext2D {
+        _nativeObj: any;
+        private _dist;
+        private _offscreenX;
+        private _offscreenY;
+        private _offscreenWidth;
+        private _offscreenHeight;
+        constructor();
+        get invertY(): boolean;
+        set invertY(value: boolean);
+        get pipelineMode(): string;
+        set pipelineMode(value: string);
+        private _passData;
+        get passData(): ShaderData;
+        set passData(value: ShaderData);
+        setRenderTarget(value: InternalRenderTarget, clear: boolean, clearColor: Color): void;
+        getRenderTarget(): InternalRenderTarget;
+        setOffscreenView(width: number, height: number, x?: number, y?: number): void;
+        getOffscreenView(out: Vector4): void;
+        drawRenderElementOne(node: IRenderElement2D): void;
+        drawRenderElementList(list: SingletonList<IRenderElement2D>): number;
+        runOneCMD(cmd: IRenderCMD): void;
+        runCMDList(cmds: IRenderCMD[]): void;
+    }
+    /**
+     * render state 在 TS 侧按 Web `uploadRenderStateBlendDepth` 的 statefirst + fallback
+     * 语义计算出来，分别 register 到 native；由 C++ 根据 renderStateIsBySprite 选 handle
+     * 绑定到 element。value2D sd 对应 sprite 路径，material / primitive sd 对应 material
+     * 路径（primitive 子类在 _pickMaterialSD 里提供兜底）。
+     */
+    class LayaXRenderElement2D implements IRenderElement2D, IRenderStateListener {
+        _nativeObj: any;
+        protected init(): void;
+        constructor();
+        /** 子类覆盖以提供 material → primitive 兜底（对齐 Web primitive 三层选择）。 */
+        protected _pickMaterialSD(): LayaXShaderData | null;
+        private _registerRS;
+        set type(v: number);
+        get type(): number;
+        private _geometry;
+        set geometry(d: IRenderGeometryElement);
+        get geometry(): IRenderGeometryElement;
+        protected _materialShaderData: LayaXShaderData;
+        set materialShaderData(d: ShaderData);
+        get materialShaderData(): ShaderData;
+        protected _value2DShaderData: LayaXShaderData;
+        set value2DShaderData(d: ShaderData);
+        get value2DShaderData(): ShaderData;
+        private _globalShaderData;
+        set globalShaderData(d: ShaderData);
+        get globalShaderData(): ShaderData;
+        protected _subShader: SubShader;
+        get subShader(): SubShader;
+        set subShader(v: SubShader);
+        _owner: IRenderStruct2D;
+        get owner(): IRenderStruct2D;
+        set owner(v: IRenderStruct2D);
+        private _nodeCommonMap;
+        get nodeCommonMap(): string[];
+        set nodeCommonMap(v: string[]);
+        private _renderStateIsBySprite;
+        get renderStateIsBySprite(): boolean;
+        set renderStateIsBySprite(v: boolean);
+        destroy(): void;
+    }
+    class LayaX3DRenderPassFactory implements I3DRenderPassFactory {
+        createRender3DProcess(): IRender3DProcess;
+        createRenderContext3D(): IRenderContext3D;
+        createSetRenderDataCMD(): SetRenderDataCMD;
+        createSetShaderDefineCMD(): SetShaderDefineCMD;
+        createDrawNodeCMDData(): DrawNodeCMDData;
+        createBlitQuadCMDData(): BlitQuadCMDData;
+        createDrawElementCMDData(): DrawElementCMDData;
+        createSetViewportCMD(): SetViewportCMD;
+        createSetRenderTargetCMD(): SetRenderTargetCMD;
+        createSceneRenderManager(): ISceneRenderManager;
+        createSkinRenderElement(): ISkinRenderElement3D;
+        createRenderElement3D(): IRenderElement3D;
+    }
+    class LayaXBaseSpotRP {
+        _nativeObj: any;
+        private _destShadowRT;
+        constructor();
+        setShadowCasterCommanBuffer(cmd: CommandBuffer[]): void;
+        setCameraCullInfo(sceneManager: ISceneRenderManager): void;
+        setRPData(spotLight: LayaXSpotLight, context: IRenderContext3D): void;
+        destroy(): void;
+    }
+    /**
+     * LayaX Blit RenderFeature — TS 层封装。
+     *
+     * 当 destRT == null（渲染到 swapchain）时，由外部调用 dispatch()，
+     * 传入 RenderElement3D + 上下文数据，Rust 端 BlitRenderFeature 直接录制渲染。
+     *
+     * 对应 C++ conchLayaXBlitFeature → Rust BlitRenderFeature。
+     */
+    class LayaXBlitRenderFeature {
+        /** C++ 原生对象（conchLayaXBlitFeature），惰性创建 */
+        private _nativeObj;
+        private _ensureNative;
+        /**
+         * 配置并调度一次 Blit 渲染。
+         *
+         * @param element     要渲染的 RenderElement3D（全屏 quad）
+         * @param destRT      目标 RT，null 表示 swapchain
+         * @param globalSD    全局 ShaderData
+         * @param sceneSD     场景 ShaderData
+         * @param cameraSD    相机 ShaderData
+         * @param viewport    视口
+         * @param scissor     裁剪矩形 (x, y, w, h)
+         * @param offsetScale UV offset + scale (ox, oy, sx, sy)
+         */
+        dispatch(element: LayaXRenderElement3D, destRT: InternalRenderTarget | null, globalSD: ShaderData | null, sceneSD: ShaderData | null, cameraSD: ShaderData | null, viewport: Viewport, scissor: Vector4, offsetScale: Vector4): void;
+        destroy(): void;
+    }
+    class LayaXDirCascadeShadowRP {
+        _nativeObj: any;
+        private _destShadowRT;
+        constructor();
+        setShadowCasterCommanBuffer(cmd: CommandBuffer[]): void;
+        private _setCmd;
+        setRPData(dirLight: LayaXDirectLight, camera: LayaXCameraNodeData, context: IRenderContext3D): void;
+        setCameraCullInfo(sceneManager: ISceneRenderManager): void;
+        destroy(): void;
+    }
+    class LayaXForwardAddClusterRP {
+        get pipelineMode(): string;
+        set pipelineMode(value: string);
+        get depthPipelineMode(): string;
+        set depthPipelineMode(value: string);
+        get depthNormalPipelineMode(): string;
+        set depthNormalPipelineMode(value: string);
+        get depthTextureMode(): DepthTextureMode;
+        set depthTextureMode(value: DepthTextureMode);
+        blitOpaqueBuffer: CommandBuffer;
+        private _depthTarget;
+        get depthTarget(): InternalRenderTarget;
+        set depthTarget(value: InternalRenderTarget);
+        private _destTarget;
+        get destTarget(): InternalRenderTarget;
+        set destTarget(value: InternalRenderTarget);
+        private _depthNormalTarget;
+        get depthNormalTarget(): InternalRenderTarget;
+        set depthNormalTarget(value: InternalRenderTarget);
+        get enableCMD(): boolean;
+        set enableCMD(value: boolean);
+        get enableOpaque(): boolean;
+        set enableOpaque(value: boolean);
+        get enableTransparent(): boolean;
+        set enableTransparent(value: boolean);
+        private _camera;
+        get camera(): LayaXCameraNodeData;
+        set camera(value: LayaXCameraNodeData);
+        private _clearColor;
+        get clearColor(): Color;
+        set clearColor(value: Color);
+        private _clearFlag;
+        get clearFlag(): number;
+        set clearFlag(value: number);
+        setViewPort(value: Viewport): void;
+        setScissor(value: Vector4): void;
+        private _getRenderCMDArray;
+        setSkyRenderNode(value: IBaseRenderNode): void;
+        setBeforeSkyboxCmds(value: CommandBuffer[]): void;
+        setBeforeForwardCmds(value: CommandBuffer[]): void;
+        setBeforeTransparentCmds(value: CommandBuffer[]): void;
+        _nativeObj: any;
+        constructor();
+        destroy(): void;
+    }
+    class LayaXForwardAddRP {
+        get shadowCastPass(): boolean;
+        set shadowCastPass(value: boolean);
+        get enableDirectLightShadow(): boolean;
+        set enableDirectLightShadow(value: boolean);
+        get enableSpotLightShadowPass(): boolean;
+        set enableSpotLightShadowPass(value: boolean);
+        get enablePostProcess(): boolean;
+        set enablePostProcess(value: boolean);
+        get postProcess(): CommandBuffer;
+        set postProcess(value: CommandBuffer);
+        get finalize(): CommandBuffer;
+        set finalize(value: CommandBuffer);
+        private _dirLightShadowPass;
+        get dirShadowRenderPass(): LayaXDirCascadeShadowRP;
+        set dirShadowRenderPass(value: LayaXDirCascadeShadowRP);
+        private _spotShadowRenderPass;
+        get spotShadowRenderPass(): LayaXBaseSpotRP;
+        set spotShadowRenderPass(value: LayaXBaseSpotRP);
+        private _mainRenderpass;
+        get mainRenderpass(): LayaXForwardAddClusterRP;
+        set mainRenderpass(value: LayaXForwardAddClusterRP);
+        _nativeObj: any;
+        constructor();
+        private _getRenderCMDArray;
+        setAfterEventCmd(value: CommandBuffer[]): void;
+        setBeforeImageEffect(value: CommandBuffer[]): void;
+        destroy(): void;
+    }
+    class LayaXRender3DProcess implements IRender3DProcess {
+        private _nativeObj;
+        private _renderPass;
+        protected _defaultDepthTex: RenderTexture;
+        protected _defaultShadowMap: RenderTexture;
+        constructor();
+        private _render3DManager;
+        get render3DManager(): ISceneRenderManager;
+        set render3DManager(value: ISceneRenderManager);
+        destroy(): void;
+        initRenderpass(camera: Camera, context: IRenderContext3D): void;
+        renderDepth(camera: Camera): void;
+        fowardRender(context: IRenderContext3D, camera: Camera): void;
+        renderFowarAddCameraPass(context: IRenderContext3D, renderpass: LayaXForwardAddRP): void;
+    }
+    /**
+     * LayaX render context for 3D.
+     *
+     * 职责精简：只负责 ShaderData / ModuleData / InvertY 绑定到 Rust。
+     * 渲染 Pass 配置（viewport/scissor/clear/RT）由 LayaXForwardAddClusterRP 直接设置。
+     * RenderElement 是 Rust 侧持久对象，draw 方法为 no-op。
+     */
+    class LayaXRenderContext3D implements IRenderContext3D {
+        /** Native C++ LayaXRenderContext object (conchLayaXRenderContext). */
+        _nativeObj: any;
+        private _globalShaderData;
+        get globalShaderData(): ShaderData;
+        set globalShaderData(value: ShaderData);
+        private _sceneData;
+        get sceneData(): ShaderData;
+        set sceneData(value: ShaderData);
+        private _cameraData;
+        get cameraData(): ShaderData;
+        set cameraData(value: ShaderData);
+        private _sceneModuleData;
+        get sceneModuleData(): ISceneNodeData;
+        set sceneModuleData(value: ISceneNodeData);
+        private _cameraModuleData;
+        get cameraModuleData(): ICameraNodeData;
+        set cameraModuleData(value: ICameraNodeData);
+        private _sceneUpdateMask;
+        get sceneUpdateMask(): number;
+        set sceneUpdateMask(value: number);
+        private _cameraUpdateMask;
+        get cameraUpdateMask(): number;
+        set cameraUpdateMask(value: number);
+        private _pipelineMode;
+        get pipelineMode(): string;
+        set pipelineMode(value: string);
+        private _invertY;
+        get invertY(): boolean;
+        set invertY(value: boolean);
+        preDrawUniformMaps: Set<string>;
+        constructor();
+        /** BlitRenderFeature 实例（惰性创建） */
+        private _blitFeature;
+        /** 缓存当前 destRT（由 setRenderTarget 设置，drawRenderElementOne 消费） */
+        private _destRT;
+        /** 缓存当前 viewport */
+        private _viewport;
+        /** 缓存当前 scissor (x, y, w, h) */
+        private _scissor;
+        /** 缓存当前 offsetScale (ox, oy, sx, sy) */
+        private _offsetScale;
+        setRenderTarget(value: InternalRenderTarget, clearFlag: RenderClearFlag): void;
+        setViewPort(value: Viewport): void;
+        setScissor(value: Vector4): void;
+        setClearData(clearFlag: number, color: Color, depth: number, stencil: number): number;
+        clearRenderTarget(): void;
+        drawRenderElementList(list: FastSinglelist<IRenderElement3D>): number;
+        drawRenderElementOne(node: IRenderElement3D): number;
+        runOneCMD(cmd: IRenderCMD): void;
+        runCMDList(cmds: IRenderCMD[]): void;
+    }
+    /**
+     * LayaX render element for 3D.
+     *
+     * 每个实例持有 C++ _nativeObj（conchLayaXRenderElement），
+     * 每个 setter 同步到 C++ → Rust FFI → Rust LYRenderElement3D。
+     *
+     * 不再用 POD packToBuffer，而是持久对象 handle 模式。
+     */
+    class LayaXRenderElement3D implements IRenderElement3D, IRenderStateListener {
+        /** C++ 原生对象（conchLayaXRenderElement） */
+        _nativeObj: any;
+        constructor();
+        private _geometry;
+        get geometry(): IRenderGeometryElement;
+        set geometry(data: IRenderGeometryElement);
+        private _materialShaderData;
+        get materialShaderData(): ShaderData;
+        set materialShaderData(data: ShaderData);
+        private _renderShaderData;
+        get renderShaderData(): ShaderData;
+        set renderShaderData(data: ShaderData);
+        private _transform;
+        get transform(): Transform3D;
+        set transform(data: Transform3D);
+        private _isRender;
+        get isRender(): boolean;
+        set isRender(data: boolean);
+        private _materialRenderQueue;
+        get materialRenderQueue(): number;
+        set materialRenderQueue(value: number);
+        private _materialId;
+        get materialId(): number;
+        set materialId(value: number);
+        private _owner;
+        get owner(): IBaseRenderNode;
+        set owner(value: IBaseRenderNode);
+        private _subShader;
+        get subShader(): SubShader;
+        set subShader(value: SubShader);
+        private _canDynamicBatch;
+        get canDynamicBatch(): boolean;
+        set canDynamicBatch(value: boolean);
+        destroy(): void;
+    }
+    /**
+     * LayaX Compute Context — 对标 GLESComputeContext
+     *
+     * TS 只传 _nativeObj 引用，C++ 提取 handle 和组装 POD。
+     * executeCMDs() = schedule，实际 flush 在 layax_render 中由 FeatureManager 统一驱动。
+     */
+    class LayaXComputeContext implements IComputeContext {
+        private _nativeObj;
+        private _destroyed;
+        constructor();
+        clearCMDs(): void;
+        addDispatchCommand(cmd: IComputeCMD_Dispatch): void;
+        addDispatchIndirectCommand(cmd: IComputeCMD_DispatchIndirect): void;
+        /**
+         * 把"设置 ShaderData 值"作为命令录到 ComputeFeature 的命令流,
+         * flush 时按录制顺序写回 ShaderDataBlock CPU 数据并更新 UBO。
+         * 保证命令流的"录制+重放"语义 —— 同一个 ComputeCommandBuffer 被重复
+         * execute 时每次都按原始值序列写。对标 WebGPUComputeContext 行为。
+         *
+         * DeviceBuffer / ReadOnlyDeviceBuffer 暂不走命令流(Rust ShaderDataValue
+         * 未包含该变体),保留立即写到 ShaderDataBlock。
+         */
+        addSetShaderDataCommand(shaderData: ShaderData, propertyID: number, shaderDataType: ShaderDataType, value: ShaderDataItem): void;
+        addBufferToBufferCommand(src: IGPUBuffer, dest: IGPUBuffer, sourceOffset?: number, destinationOffset?: number, size?: number): void;
+        addBufferToTextureCommand(_src: IGPUBuffer, _srcInfo: any, _dstInfo: any, _copySize: any): void;
+        addTextureToBufferCommand(_srcInfo: any, _dst: IGPUBuffer, _dstInfo: any, _copySize: Iterable<number>): void;
+        addTextureToTextureCommand(srcTextureInfo: CopyTextureInfo, destTextureInfo: CopyTextureInfo, copySize: Iterable<number>): void;
+        addClearBufferCommand(dest: IDeviceBuffer, destoffset: number, destCount: number): void;
+        executeCMDs(): void;
+        destroy(): void;
+        private static _extentToTuple;
+    }
+    /**
+     * Binding type enum — numeric values match WebGPUBindingInfoType
+     * so GLSLForVulkanGenerator can read .type without changes.
+     */
+    enum LayaXBindingInfoType {
+        buffer = 0,
+        texture = 1,
+        sampler = 2,
+        storageBuffer = 3,
+        storageTexture = 4
+    }
+    /**
+     * Per-binding info for LayaX.
+     *
+     * Duck-type compatible with WebGPUUniformPropertyBindingInfo so
+     * GLSLForVulkanGenerator.process can consume it without changes.
+     * Also serialized to JSON for Rust FFI (layax_create_render_program).
+     */
+    interface LayaXBindingInfo {
+        id: number;
+        name: string;
+        set: number;
+        binding: number;
+        propertyId: number;
+        /** Source ShaderPropertyMap ID (matches Rust source_map_id for ShaderDataBlock lookup) */
+        sourceMapId: number;
+        type: LayaXBindingInfoType;
+        /** For Rust JSON serialization */
+        bindingType: string;
+        dataType: number;
+        /** GLSLForVulkanGenerator reads these for texture/sampler declarations */
+        texture?: {
+            sampleType: string;
+            viewDimension: string;
+            multisampled: boolean;
+        };
+        sampler?: {
+            type: string;
+        };
+        buffer?: {
+            type: string;
+            hasDynamicOffset?: boolean;
+        };
+        storageTexture?: {
+            access: string;
+            format: string;
+            viewDimension: string;
+        };
+        format?: string;
+    }
+    class LayaXBindGroupHelper {
+        private static _cache;
+        private static _getCacheKey;
+        private static _cloneBindingInfoArray;
+        private static _getTextureViewDimension;
+        /**
+         * Build binding info array from CommandUniformMap names.
+         * Mirrors WebGPUBindGroupHelper.createBindPropertyInfoArrayByCommandMap
+         * but uses LayaXCommandUniformMap as data source.
+         */
+        static createBindingInfoArray(groupID: number, mapNames: string[]): LayaXBindingInfo[];
+        /**
+         * Build binding info array from a raw uniform map (for material set).
+         * Equivalent to WebGPUBindGroupHelper.createBindGroupInfosByUniformMap.
+         */
+        static createBindingInfosByUniformMap(groupID: number, name: string, cacheName: string, uniformMap: Map<number, UniformProperty>): LayaXBindingInfo[];
+        /**
+         * Compute texture existence bitmask for a set.
+         */
+        static computeTextureExits(setIndex: number, mapNames: string[], bindings: LayaXBindingInfo[]): number;
+    }
+    class LayaXBufferState implements IBufferState {
+        _bindedIndexBuffer: IIndexBuffer;
+        _vertexBuffers: IVertexBuffer[];
+        _nativeObj: any;
+        /** attribute location set, collected from vertex declarations (same as WebGPUBufferState._attriLocArray) */
+        _attriLocArray: Set<number>;
+        constructor();
+        applyState(vertexBuffers: IVertexBuffer[], indexBuffer: IIndexBuffer): void;
+        destroy(): void;
+    }
+    class LayaXCommandUniformMap extends CommandUniformMap {
+        _nativeObj: any;
+        _stateName: string;
+        _stateID: number;
+        constructor(stateName: string);
+        hasPtrID(propertyID: number): boolean;
+        /**
+         * Add a UniformArray parameter.
+         */
+        addShaderUniformArray(propertyID: number, propertyName: string, uniformtype: ShaderDataType, arrayLength: number): void;
+        setDefaultTextureData(key: number, defaultTex: BaseTexture): void;
+    }
+    /**
+     * LayaX 后端 DeviceBuffer (Storage Buffer) 薄包装。
+     *
+     * - native 对象由 `conchLayaXDeviceBuffer(rhiUsage, heapType)` 构造，持有 GpuDeviceBufferId (u32)
+     * - 越界 setData 由 Rust FFI 自动 destroy + recreate 扩容（与 VB/IB 一致）
+     * - 扩容后已绑定到 ShaderData 的旧 handle 不会自动刷新，调用方需重新 `setDeviceBuffer`
+     */
+    class LayaXDeviceBuffer implements IDeviceBuffer, IGPUBuffer {
+        _nativeObj: any;
+        private _usage;
+        private _size;
+        private _destroyed;
+        constructor(usage: EDeviceBufferUsage);
+        /**
+         * EDeviceBufferUsage(LayaAir) → rhi_resource::buffer_usage(Rust) 位映射。
+         *
+         * Rust bit:  VERTEX=0, INDEX=1, UNIFORM=2, STORAGE=3, INDIRECT=4, COPY_SRC=5, COPY_DST=6
+         * MAP_READ / MAP_WRITE 不在 usage flags 中，它们决定 heap_type。
+         */
+        private static _convertUsage;
+        /**
+         * MAP_READ → 2 (Readback) / MAP_WRITE → 1 (Upload) / 否则 0 (DeviceLocal)
+         */
+        private static _convertHeapType;
+        getNativeBuffer(): any;
+        setData(buffer: ArrayBuffer, bufferOffset: number, dataStartIndex: number, dataCount: number): void;
+        setDataLength(byteLength: number): void;
+        copyToBuffer(buffer: IVertexBuffer | IDeviceBuffer, sourceOffset: number, destOffset: number, byteLength: number): void;
+        copyToTexture(): void;
+        readData(dest: ArrayBuffer, destOffset: number, srcOffset: number, byteLength: number): Promise<void>;
+        destroy(): void;
+        get destroyed(): boolean;
+        get size(): number;
+        get usage(): EDeviceBufferUsage;
+    }
+    class LayaXIndexBuffer implements IIndexBuffer {
+        _nativeObj: any;
+        private _bufferRef;
+        constructor(bufferUsageType: BufferUsage);
+        get indexType(): IndexFormat;
+        set indexType(value: IndexFormat);
+        get indexCount(): number;
+        set indexCount(value: number);
+        setData(buffer: ArrayBuffer, bufferOffset: number, dataStartIndex: number, dataCount: number): void;
+        _setIndexDataLength(data: number): void;
+        _setIndexData(data: Uint32Array | Uint16Array | Uint8Array, bufferOffset: number): void;
+        destroy(): void;
+    }
+    class LayaXInternalRT implements InternalRenderTarget {
+        _texturesRef: InternalTexture[];
+        _depthTextureRef: InternalTexture;
+        _nativeObj: any;
+        constructor(nativeObj: any);
+        get _isCube(): boolean;
+        set _isCube(value: boolean);
+        get _samples(): number;
+        set _samples(value: number);
+        get _generateMipmap(): boolean;
+        set _generateMipmap(value: boolean);
+        get colorFormat(): RenderTargetFormat;
+        set colorFormat(value: RenderTargetFormat);
+        get depthStencilFormat(): RenderTargetFormat;
+        set depthStencilFormat(value: RenderTargetFormat);
+        get isSRGB(): boolean;
+        set isSRGB(value: boolean);
+        get gpuMemory(): number;
+        set gpuMemory(value: number);
+        get _textures(): InternalTexture[];
+        get _depthTexture(): InternalTexture;
+        dispose(): void;
+    }
+    /**
+     * LayaX 异步回读事件分发。
+     *
+     * 流程：
+     * 1. `LayaXDeviceBuffer.readData` 调 FFI 拿到 requestId，用 `register` 登记 Promise
+     * 2. `LayaXRenderEngine.startFrame` 每帧调 `pump(device)` 拉底层 DeviceEvent
+     * 3. 按 requestId 找到登记的 Promise 完成/失败
+     *
+     * DeviceEventType 与 Rust 保持一致：
+     *   0=DeviceLost, 1=SwapchainOutOfDate, 2=OutOfMemory, 3=BackendError,
+     *   4=ReadbackCompleted, 5=ReadbackFailed
+     */
+    class LayaXReadbackDispatcher {
+        private static _pending;
+        /**
+         * 登记一次待完成的回读请求。
+         * @param id FFI 返回的 request_id（>0）
+         */
+        static register(id: number, resolve: () => void, reject: (e: Error) => void): void;
+        /**
+         * 主循环每帧调：拉底层 DeviceEvent 并派发 Readback 完成事件。
+         * @param device conchLayaXDevice 实例
+         */
+        static pump(device: any): void;
+        private static _rejectAll;
+    }
+    class LayaXSetRenderData extends SetRenderDataCMD {
+        type: RenderCMDType;
+        protected _dataType: ShaderDataType;
+        protected _propertyID: number;
+        protected _dest: ShaderData;
+        protected _value: ShaderDataItem;
+        data_v4: Vector4;
+        data_v3: Vector3;
+        data_v2: Vector2;
+        data_mat: Matrix4x4;
+        data_number: number;
+        data_texture: BaseTexture;
+        data_Color: Color;
+        data_Buffer: Float32Array;
+        constructor();
+        get dataType(): ShaderDataType;
+        set dataType(value: ShaderDataType);
+        get propertyID(): number;
+        set propertyID(value: number);
+        get dest(): ShaderData;
+        set dest(value: ShaderData);
+        get value(): ShaderDataItem;
+        set value(value: ShaderDataItem);
+        apply(_context: any): void;
+    }
+    class LayaXSetShaderDefine extends SetShaderDefineCMD {
+        type: RenderCMDType;
+        protected _define: ShaderDefine;
+        protected _dest: ShaderData;
+        protected _add: boolean;
+        constructor();
+        get define(): ShaderDefine;
+        set define(value: ShaderDefine);
+        get dest(): ShaderData;
+        set dest(value: ShaderData);
+        get add(): boolean;
+        set add(value: boolean);
+        apply(_context: any): void;
+    }
+    class LayaXRenderDeviceFactory implements IRenderDeviceFactory {
+        createShaderData(ownerResource: Resource): ShaderData;
+        private globalBlockMap;
+        createGlobalUniformMap(blockName: string): LayaXCommandUniformMap;
+        createComputeShader(info: ComputeShaderProcessInfo): IComputeShader;
+        createComputeContext(): IComputeContext;
+        createShaderInstance(shaderProcessInfo: ShaderProcessInfo, shaderPass: ShaderPass): IShaderInstance;
+        createIndexBuffer(bufferUsage: BufferUsage): IIndexBuffer;
+        createVertexBuffer(bufferUsageType: BufferUsage): IVertexBuffer;
+        createDeviceBuffer(type: EDeviceBufferUsage): IDeviceBuffer;
+        createBufferState(): IBufferState;
+        createRenderGeometryElement(mode: MeshTopology, drawType: DrawType): IRenderGeometryElement;
+        createEngine(config: Config, canvas: HTMLCanvas): Promise<void>;
+    }
+    /**
+     * LayaX render engine implementation.
+     * Uses wgpu-based native backend via conchLayaXDevice.
+     */
+    class LayaXRenderEngine implements IRenderEngine {
+        static _instance: LayaXRenderEngine;
+        _context: any;
+        _isShaderDebugMode: boolean;
+        _nativeObj: any;
+        private _textureContext;
+        private _lastTextureMemory;
+        private _lastRenderTargetMemory;
+        private _lastDeviceBufferMemory;
+        private _lastGpuBufferMemory;
+        private _lastGpuMemory;
+        shaderCompiler: LayaXShaderCompiler;
+        constructor();
+        get _framePassCount(): number;
+        set _framePassCount(value: number);
+        _remapZ: boolean;
+        _screenInvertY: boolean;
+        _lodTextureSample: boolean;
+        _breakTextureSample: boolean;
+        initRenderEngine(canvas: HTMLCanvasElement): void;
+        resizeOffScreen(width: number, height: number): void;
+        getDefineByName(name: string): RTShaderDefine;
+        getNamesByDefineData(defineData: IDefineDatas, out: Array<string>): void;
+        addTexGammaDefine(key: number, value: RTShaderDefine): void;
+        copySubFrameBuffertoTex(texture: InternalTexture, level: number, xoffset: number, yoffset: number, x: number, y: number, width: number, height: number): void;
+        propertyNameToID(name: string): number;
+        propertyIDToName(id: number): string;
+        getParams(params: RenderParams): number;
+        getCapable(capatableType: RenderCapable): boolean;
+        getTextureContext(): ITextureContext;
+        startFrame(): void;
+        endFrame(): void;
+        private _recordAbsoluteMemory;
+        private _syncStatistics;
+        viewport(x: number, y: number, width: number, height: number): void;
+        scissor(x: number, y: number, width: number, height: number): void;
+    }
+    class LayaXRenderGeometry implements IRenderGeometryElement {
+        private _bufferState;
+        _nativeObj: any;
+        getDrawDataParams(out: FastSinglelist<number>): void;
+        setDrawArrayParams(first: number, count: number): void;
+        setDrawElemenParams(count: number, offset: number): void;
+        destroy(): void;
+        clearRenderParams(): void;
+        /**
+         * Bind an indirect draw buffer. Pass null to disable.
+         * `drawType` must also be set to DrawArrayIndirect or DrawElementIndirect
+         * for indirect execution to take effect.
+         */
+        setIndirectDrawBuffer(buffer: IDeviceBuffer, offset: number): void;
+        set bufferState(value: IBufferState);
+        get bufferState(): IBufferState;
+        set mode(value: MeshTopology);
+        get mode(): MeshTopology;
+        set drawType(value: DrawType);
+        get drawType(): DrawType;
+        set instanceCount(value: number);
+        get instanceCount(): number;
+        set indexFormat(value: IndexFormat);
+        get indexFormat(): IndexFormat;
+    }
+    /** RenderState 变化监听者接口（避免循环引用） */
+    interface IRenderStateListener {
+        _onRenderStateChanged(): void;
+    }
+    class LayaXShaderData extends ShaderData {
+        nativeObjID: number;
+        _nativeObj: any;
+        _defineDatas: LayaXDefineDatas;
+        _textureData: {
+            [key: number]: BaseTexture;
+        };
+        _bufferData: {
+            [key: number]: Float32Array;
+        };
+        _deviceBufferData: {
+            [key: number]: IDeviceBuffer;
+        };
+        getDefineData(): LayaXDefineDatas;
+        clearData(): void;
+        /**
+         * @ignore
+         */
+        addDefine(define: RTShaderDefine): void;
+        /**
+         * @ignore
+         */
+        addDefines(define: LayaXDefineDatas): void;
+        /**
+         * @ignore
+         */
+        removeDefine(define: RTShaderDefine): void;
+        /**
+         * @ignore
+         */
+        hasDefine(define: RTShaderDefine): boolean;
+        /**
+         * @ignore
+         */
+        clearDefine(): void;
+        _addRenderStateListener(listener: IRenderStateListener): void;
+        _removeRenderStateListener(listener: IRenderStateListener): void;
+        getBool(index: number): boolean;
+        setBool(index: number, value: boolean): void;
+        getInt(index: number): number;
+        setInt(index: number, value: number): void;
+        getNumber(index: number): number;
+        setNumber(index: number, value: number): void;
+        getVector2(index: number): Vector2;
+        setVector2(index: number, value: Vector2): void;
+        getVector3(index: number): Vector3;
+        setVector3(index: number, value: Vector3): void;
+        getVector(index: number): Vector4;
+        setVector(index: number, value: Vector4): void;
+        getColor(index: number): Color;
+        setColor(index: number, value: Color): void;
+        getMatrix4x4(index: number): Matrix4x4;
+        setMatrix4x4(index: number, value: Matrix4x4): void;
+        getMatrix3x3(index: number): Matrix3x3;
+        setMatrix3x3(index: number, value: Matrix3x3): void;
+        getBuffer(index: number): Float32Array;
+        setBuffer(index: number, value: Float32Array): void;
+        setDeviceBuffer(index: number, value: IDeviceBuffer): void;
+        setTexture(index: number, value: BaseTexture): void;
+        getTexture(index: number): BaseTexture;
+        update(name: string): void;
+        cloneTo(destObject: LayaXShaderData): void;
+        clone(): LayaXShaderData;
+        destroy(): void;
+    }
+    class LayaXTextureContext implements ITextureContext {
+        needBitmap: boolean;
+        protected _native: any;
+        constructor(native: any);
+        createRenderTargetFromArrayLayer(arrayTex: InternalTexture, layer: number, colorFormat: RenderTargetFormat, depthStencilFormat: RenderTargetFormat, sRGB: boolean): InternalRenderTarget;
+        createTextureInternal(dimension: TextureDimension, width: number, height: number, format: TextureFormat, generateMipmap: boolean, sRGB: boolean, premultipliedAlpha: boolean): LayaXInternalTex;
+        setTextureImageData(texture: LayaXInternalTex, source: HTMLImageElement | HTMLCanvasElement | ImageBitmap, premultiplyAlpha: boolean, invertY: boolean): void;
+        setTexturePixelsData(texture: LayaXInternalTex, source: ArrayBufferView, premultiplyAlpha: boolean, invertY: boolean): void;
+        initVideoTextureData(texture: LayaXInternalTex): void;
+        setTextureSubPixelsData(texture: LayaXInternalTex, source: ArrayBufferView, mipmapLevel: number, generateMipmap: boolean, xOffset: number, yOffset: number, width: number, height: number, premultiplyAlpha: boolean, invertY: boolean): void;
+        setTextureSubImageData(texture: LayaXInternalTex, source: HTMLImageElement | HTMLCanvasElement | ImageBitmap, x: number, y: number, premultiplyAlpha: boolean, invertY: boolean): void;
+        setTexture3DImageData(texture: LayaXInternalTex, source: HTMLImageElement[] | HTMLCanvasElement[] | ImageBitmap[], depth: number, premultiplyAlpha: boolean, invertY: boolean): void;
+        createTexture3DInternal(dimension: TextureDimension, width: number, height: number, depth: number, format: TextureFormat, generateMipmap: boolean, sRGB: boolean, premultipliedAlpha: boolean): LayaXInternalTex;
+        setTexture3DPixelsData(texture: LayaXInternalTex, source: ArrayBufferView, depth: number, premultiplyAlpha: boolean, invertY: boolean): void;
+        setTexture3DSubPixelsData(texture: LayaXInternalTex, source: ArrayBufferView, mipmapLevel: number, generateMipmap: boolean, xOffset: number, yOffset: number, zOffset: number, width: number, height: number, depth: number, premultiplyAlpha: boolean, invertY: boolean): void;
+        setTextureHDRData(texture: LayaXInternalTex, hdrInfo: HDRTextureInfo): void;
+        setTextureDDSData(texture: LayaXInternalTex, ddsInfo: DDSTextureInfo): void;
+        setTextureKTXData(texture: LayaXInternalTex, ktxInfo: KTXTextureInfo): void;
+        setCubeImageData(texture: LayaXInternalTex, sources: (HTMLImageElement | HTMLCanvasElement | ImageBitmap)[], premultiplyAlpha: boolean, invertY: boolean): void;
+        setCubePixelsData(texture: LayaXInternalTex, source: ArrayBufferView[], premultiplyAlpha: boolean, invertY: boolean): void;
+        setCubeSubPixelData(texture: LayaXInternalTex, source: ArrayBufferView[], mipmapLevel: number, generateMipmap: boolean, xOffset: number, yOffset: number, width: number, height: number, premultiplyAlpha: boolean, invertY: boolean): void;
+        setCubeDDSData(texture: LayaXInternalTex, ddsInfo: DDSTextureInfo): void;
+        setCubeKTXData(texture: LayaXInternalTex, ktxInfo: KTXTextureInfo): void;
+        setTextureCompareMode(texture: LayaXInternalTex, compareMode: TextureCompareMode): TextureCompareMode;
+        bindRenderTarget(renderTarget: LayaXInternalRT, faceIndex?: number): void;
+        bindoutScreenTarget(): void;
+        unbindRenderTarget(renderTarget: LayaXInternalRT): void;
+        createRenderTargetInternal(width: number, height: number, colorFormat: RenderTargetFormat, depthStencilFormat: RenderTargetFormat, generateMipmap: boolean, sRGB: boolean, multiSamples: number, storage: boolean): LayaXInternalRT;
+        createRenderTargetCubeInternal(size: number, colorFormat: RenderTargetFormat, depthStencilFormat: RenderTargetFormat, generateMipmap: boolean, sRGB: boolean, multiSamples: number): LayaXInternalRT;
+        createRenderTextureCubeInternal(dimension: TextureDimension, size: number, format: RenderTargetFormat, generateMipmap: boolean, sRGB: boolean): LayaXInternalTex;
+        createRenderTargetDepthTexture(renderTarget: LayaXInternalRT, dimension: TextureDimension, width: number, height: number): LayaXInternalTex;
+        /** @deprecated 用 readRenderTargetPixelDataAsync */
+        readRenderTargetPixelData(renderTarget: LayaXInternalRT, xOffset: number, yOffset: number, width: number, height: number, out: ArrayBufferView): ArrayBufferView;
+        /**
+         * 异步回读 RT color attachment 像素到 `out`。
+         * 走 LayaXReadbackDispatcher 等 ReadbackCompleted 事件，不阻塞主线程。
+         * bpp 由 `out.byteLength / (w*h)` 推断；wgpu 行宽 256 对齐，回来按行 strip padding 拷贝到 `out`。
+         */
+        readRenderTargetPixelDataAsync(renderTarget: LayaXInternalRT, xOffset: number, yOffset: number, width: number, height: number, out: ArrayBufferView): Promise<ArrayBufferView>;
+        updateVideoTexture(texture: LayaXInternalTex, video: HTMLVideoElement, premultiplyAlpha: boolean, invertY: boolean): void;
+    }
+    class LayaXVertexBuffer implements IVertexBuffer {
+        _instanceBuffer: boolean;
+        _nativeObj: any;
+        constructor(bufferUsageType: BufferUsage);
+        private _vertexDeclaration;
+        get vertexDeclaration(): VertexDeclaration;
+        set vertexDeclaration(value: VertexDeclaration);
+        get instanceBuffer(): boolean;
+        set instanceBuffer(value: boolean);
+        getStorageBuffer(): IDeviceBuffer;
+        setData(buffer: ArrayBuffer, bufferOffset: number, dataStartIndex: number, dataCount: number): void;
+        setDataLength(byteLength: number): void;
+        destroy(): void;
+    }
+    interface GlslangCompiler {
+        getVersion(): string;
+        glsl450_to_spirv(glslSource: string, stage: "vertex" | "fragment" | "compute"): {
+            spirv: Uint32Array;
+            info_log: string;
+            success: boolean;
+        };
+        glsl300es_preprocess(glslSource: string, stage: "vertex" | "fragment" | "compute"): {
+            preprocessed_code: string;
+            info_log: string;
+            success: boolean;
+        };
+        preprocess_compute(glslSource: string, stage: "compute"): {
+            success: boolean;
+            preprocessed_code: string;
+            info_log: string;
+            uniforms: Map<string, {
+                type: string;
+                format?: string;
+                access?: "readonly" | "writeonly" | "readwrite";
+            }>;
+            ssbos: Map<string, "readonly" | "writeonly" | "readwrite">;
+            ubos: Map<string, string>;
+            samplers: Map<string, {
+                type: string;
+            }>;
+        };
+        glsl450_combine_to_spirv(glslSource: string, stage: "vertex" | "fragment" | "compute", splitSampler: boolean): {
+            spirv: Uint32Array;
+            info_log: string;
+            success: boolean;
+        };
+    }
+    interface NagaCompiler {
+        spirv_to_wgsl(spv: Uint8Array, validation: boolean): string;
+        glsl_to_wgsl(source: string, stage: "vertex" | "fragment" | "compute", validation: boolean): string;
+        wgsl_to_spirv(source: string, stage: "vertex" | "fragment" | "compute", validation: boolean): Uint32Array;
+    }
+    class LayaXShaderCompiler {
+        glslang: GlslangCompiler;
+        naga: NagaCompiler;
+        constructor();
+        init(): Promise<[
+            unknown,
+            unknown
+        ]>;
+        destroy(): void;
+    }
+    /**
+     * LayaX 3D RenderModule factory.
+     *
+     * Creates LayaX-specific bridge objects that wrap `conchLayaX*` native classes.
+     * All rendering is driven by the Rust RenderFeature; these objects serve as
+     * the TS-side data bridge.
+     */
+    class LayaX3DRenderModuleFactory implements I3DRenderModuleFactory {
+        createTransform(owner: Sprite3D): LayaXTransform3D;
+        createBounds(min: Vector3, max: Vector3): LayaXBounds;
+        createVolumetricGI(): LayaXVolumetricGI;
+        createReflectionProbe(): LayaXReflectionProbe;
+        createLightmapData(): LayaXLightmapData;
+        createDirectLight(): LayaXDirectLight;
+        createSpotLight(): LayaXSpotLight;
+        createPointLight(): IPointLightData;
+        createCameraModuleData(): LayaXCameraNodeData;
+        createSceneModuleData(): LayaXSceneNodeData;
+        createBaseRenderNode(): LayaXBaseRenderNode;
+        createMeshRenderNode(): LayaXMeshRenderNode;
+        createSkinRenderNode(): ISkinRenderNode;
+        createSimpleSkinRenderNode(): ISimpleSkinRenderNode;
+    }
+    /**
+     * LayaX BaseRenderNode bridge.
+     *
+     * Implements `IBaseRenderNode` by delegating all property access to the native
+     * `conchLayaXBaseRenderNode` object.  Rendering is driven by the Rust side;
+     * this class is a thin data-bridge.
+     */
+    class LayaXBaseRenderNode implements IBaseRenderNode {
+        private _transform;
+        get transform(): LayaXTransform3D;
+        set transform(value: LayaXTransform3D);
+        get distanceForSort(): number;
+        set distanceForSort(value: number);
+        get sortingFudge(): number;
+        set sortingFudge(value: number);
+        get castShadow(): boolean;
+        set castShadow(value: boolean);
+        get receiveShadow(): boolean;
+        set receiveShadow(value: boolean);
+        get enable(): boolean;
+        set enable(value: boolean);
+        get renderbitFlag(): number;
+        set renderbitFlag(value: number);
+        get visibalRangeBit(): number;
+        set visibalRangeBit(value: number);
+        get visibalMin(): number;
+        set visibalMin(value: number);
+        get visibalMax(): number;
+        set visibalMax(value: number);
+        get layer(): number;
+        set layer(value: number);
+        get renderNodeType(): number;
+        set renderNodeType(value: number);
+        private _boundsChange;
+        get boundsChange(): boolean;
+        set boundsChange(value: boolean);
+        get staticMask(): number;
+        set staticMask(value: number);
+        get lightmapIndex(): number;
+        set lightmapIndex(value: number);
+        get reflectionMode(): number;
+        set reflectionMode(value: number);
+        get lightProbUpdateMark(): number;
+        set lightProbUpdateMark(value: number);
+        get perCameraUpdate(): boolean;
+        set perCameraUpdate(value: boolean);
+        private _bounds;
+        get bounds(): Bounds;
+        set bounds(value: Bounds);
+        private _baseGeometryBounds;
+        get baseGeometryBounds(): Bounds;
+        set baseGeometryBounds(value: Bounds);
+        private _shaderData;
+        get shaderData(): ShaderData;
+        set shaderData(value: ShaderData);
+        private _additionShaderData;
+        get additionShaderData(): Map<string, ShaderData>;
+        set additionShaderData(value: Map<string, ShaderData>);
+        lightmapScaleOffset: Vector4;
+        lightmapDirtyFlag: number;
+        private _lightmap;
+        get lightmap(): LayaXLightmapData;
+        set lightmap(value: LayaXLightmapData);
+        private _probeReflection;
+        get probeReflection(): LayaXReflectionProbe;
+        set probeReflection(value: LayaXReflectionProbe);
+        private _volumetricGI;
+        get volumetricGI(): LayaXVolumetricGI;
+        set volumetricGI(value: LayaXVolumetricGI);
+        private _irradientMode;
+        get irradientMode(): IrradianceMode;
+        set irradientMode(value: IrradianceMode);
+        private _ismoved;
+        get ismoved(): Vector2;
+        set ismoved(value: Vector2);
+        private _caculateBoundingBoxbindFun;
+        private _renderUpdatePrebindFun;
+        set_renderUpdatePreCall(call: any, fun: any): void;
+        set_caculateBoundingBox(call: any, fun: any): void;
+        protected _getNativeObj(): void;
+        constructor();
+        private _worldParams;
+        setNodeCustomData(dataSlot: ENodeCustomData, data: number): void;
+        setRenderelements(value: IRenderElement3D[]): void;
+        setLightmapScaleOffset(value: Vector4): void;
+        setCommonUniformMap(value: string[]): void;
+        setOneMaterial(index: number, mat: Material): void;
+        _applyLightProb(): void;
+        _applyReflection(): void;
+        destroy(): void;
+    }
+    /**
+     * LayaX Bounds bridge.
+     *
+     * Wraps a `conchLayaXBounds` native object. Unlike the RT path which uses
+     * shared memory for min/max/center/extent, the LayaX path delegates via
+     * simple setter/getter calls on the native object.
+     */
+    class LayaXBounds implements IClone {
+        get min(): Vector3;
+        set min(value: Vector3);
+        get max(): Vector3;
+        set max(value: Vector3);
+        setMin(value: Vector3): void;
+        getMin(): Vector3;
+        setMax(value: Vector3): void;
+        getMax(): Vector3;
+        setCenter(value: Vector3): void;
+        getCenter(): Vector3;
+        setExtent(value: Vector3): void;
+        getExtent(): Vector3;
+        constructor(min?: Vector3, max?: Vector3);
+        _getBoundBox(): BoundBox;
+        private _syncBoundBoxFromNative;
+        /**
+         * @returns -1 means no intersection; otherwise returns intersection volume.
+         */
+        calculateBoundsintersection(bounds: Bounds): number;
+        cloneTo(destObject: LayaXBounds): void;
+        clone(): LayaXBounds;
+    }
+    /**
+     * LayaX CameraNodeData bridge.
+     *
+     * Wraps camera projection parameters for the Rust rendering pipeline via
+     * `conchLayaXCameraNodeData`.
+     */
+    class LayaXCameraNodeData implements ICameraNodeData {
+        private _transform;
+        get transform(): LayaXTransform3D;
+        set transform(value: LayaXTransform3D);
+        get farplane(): number;
+        set farplane(value: number);
+        get nearplane(): number;
+        set nearplane(value: number);
+        get fieldOfView(): number;
+        set fieldOfView(value: number);
+        get aspectRatio(): number;
+        set aspectRatio(value: number);
+        get handle(): number;
+        constructor();
+        setProjectionViewMatrix(value: Matrix4x4): void;
+        setForward(x: number, y: number, z: number): void;
+        syncProjection(): void;
+        /** 释放 native camera entity（含 cascade shadow entities + cull bit slot）。 */
+        destroy(): void;
+    }
+    /**
+     * LayaX DefineDatas — Rust-backed shader define bitmask.
+     *
+     * Delegates all operations to `conchLayaXDefineDatas` (C++ → Rust FFI).
+     * Unlike RTDefineDatas which uses conchRTDefineDatas (GLES path),
+     * this uses the LayaX path with Rust-side storage and variant selection.
+     */
+    class LayaXDefineDatas implements IDefineDatas {
+        _nativeObj: any;
+        constructor();
+        get _length(): number;
+        set _length(value: number);
+        get _mask(): number[];
+        set _mask(value: number[]);
+        add(define: ShaderDefine): void;
+        remove(define: ShaderDefine): void;
+        addDefineDatas(define: IDefineDatas): void;
+        removeDefineDatas(define: IDefineDatas): void;
+        has(define: ShaderDefine): boolean;
+        clear(): void;
+        cloneTo(destObject: IDefineDatas): void;
+        clone(): LayaXDefineDatas;
+        destroy(): void;
+    }
+    /**
+     * LayaX DirectLight bridge.
+     *
+     * Delegates directional light shadow and direction data to the native
+     * `conchLayaXDirectLight` object.
+     */
+    class LayaXDirectLight implements IDirectLightData {
+        private _transform;
+        get transform(): LayaXTransform3D;
+        set transform(value: LayaXTransform3D);
+        get shadowResolution(): number;
+        set shadowResolution(value: number);
+        get shadowDistance(): number;
+        set shadowDistance(value: number);
+        get shadowMode(): ShadowMode;
+        set shadowMode(value: ShadowMode);
+        get shadowStrength(): number;
+        set shadowStrength(value: number);
+        get shadowDepthBias(): number;
+        set shadowDepthBias(value: number);
+        get shadowNormalBias(): number;
+        set shadowNormalBias(value: number);
+        get shadowNearPlane(): number;
+        set shadowNearPlane(value: number);
+        get shadowCascadesMode(): ShadowCascadesMode;
+        set shadowCascadesMode(value: ShadowCascadesMode);
+        get shadowTwoCascadeSplits(): number;
+        set shadowTwoCascadeSplits(value: number);
+        setShadowFourCascadeSplits(value: Vector3): void;
+        setDirection(value: Vector3): void;
+        constructor();
+        syncShadow(): void;
+    }
+    /**
+     * LayaX LightmapData bridge.
+     *
+     * Wraps lightmap color and direction textures for the Rust rendering pipeline
+     * via `conchLayaXLightmapData`.
+     */
+    class LayaXLightmapData implements ILightMapData {
+        constructor();
+        get lightmapColor(): InternalTexture;
+        set lightmapColor(value: InternalTexture);
+        get lightmapDirection(): InternalTexture;
+        set lightmapDirection(value: InternalTexture);
+        destroy(): void;
+    }
+    /**
+     * LayaX MeshRenderNode bridge.
+     *
+     * Extends LayaXBaseRenderNode and implements IMeshRenderNode.
+     * Currently identical to the base — the native class `conchLayaXMeshRenderNode`
+     * may carry additional mesh-specific state on the Rust side.
+     */
+    class LayaXMeshRenderNode extends LayaXBaseRenderNode implements IMeshRenderNode {
+    }
+    /**
+     * LayaX PointLight bridge.
+     *
+     * Delegates point light data to the native `conchLayaXPointLight` object.
+     */
+    class LayaXPointLight implements IPointLightData {
+        private _transform;
+        get transform(): LayaXTransform3D;
+        set transform(value: LayaXTransform3D);
+        get range(): number;
+        set range(value: number);
+        get shadowResolution(): number;
+        set shadowResolution(value: number);
+        get shadowDistance(): number;
+        set shadowDistance(value: number);
+        get shadowMode(): ShadowMode;
+        set shadowMode(value: ShadowMode);
+        get shadowStrength(): number;
+        set shadowStrength(value: number);
+        get shadowDepthBias(): number;
+        set shadowDepthBias(value: number);
+        get shadowNormalBias(): number;
+        set shadowNormalBias(value: number);
+        get shadowNearPlane(): number;
+        set shadowNearPlane(value: number);
+        constructor();
+    }
+    /**
+     * LayaX ReflectionProbe bridge.
+     *
+     * Wraps reflection probe data for the Rust rendering pipeline via
+     * `conchLayaXReflectionProbe`.
+     */
+    class LayaXReflectionProbe implements IReflectionProbeData {
+        private static _idCounter;
+        private _updateMaskFlag;
+        get boxProjection(): boolean;
+        set boxProjection(value: boolean);
+        private _bound;
+        get bound(): Bounds;
+        set bound(value: Bounds);
+        get ambientMode(): AmbientMode;
+        set ambientMode(value: AmbientMode);
+        get ambientIntensity(): number;
+        set ambientIntensity(value: number);
+        get reflectionIntensity(): number;
+        set reflectionIntensity(value: number);
+        private _reflectionTexture;
+        get reflectionTexture(): InternalTexture;
+        set reflectionTexture(value: InternalTexture);
+        private _iblTex;
+        get iblTex(): InternalTexture;
+        set iblTex(value: InternalTexture);
+        get updateMark(): number;
+        set updateMark(value: number);
+        get iblTexRGBD(): boolean;
+        set iblTexRGBD(value: boolean);
+        private _shaderData;
+        get shaderData(): ShaderData;
+        set shaderData(value: ShaderData);
+        private _probePosition;
+        setProbePosition(value: Vector3): void;
+        private _ambientColor;
+        setAmbientColor(value: Color): void;
+        setAmbientSH(value: Float32Array): void;
+        needUpdate(): boolean;
+        applyRenderData(): void;
+        constructor();
+        destroy(): void;
+    }
+    /**
+     * LayaX RenderState — Rust-backed render state.
+     *
+     * Inherits all state storage from base RenderState.
+     * TODO: Add FFI sync to Rust when RenderState FFI is implemented.
+     */
+    class LayaXRenderState extends RenderState {
+        _nativeObj: any;
+        protected createObj(): void;
+        constructor();
+        cloneTo(dest: RenderState): void;
+        clone(): RenderState;
+    }
+    /**
+     * LayaX SceneNodeData bridge.
+     *
+     * Wraps scene-level data (currently just the lightmap dirty flag) for the Rust
+     * rendering pipeline via `conchLayaXSceneNodeData`.
+     */
+    class LayaXSceneNodeData implements ISceneNodeData {
+        get lightmapDirtyFlag(): number;
+        set lightmapDirtyFlag(value: number);
+        constructor();
+    }
+    /**
+     * LayaX ShaderPass — Rust-backed shader pass with compile callback.
+     *
+     * When Rust encounters a variant cache miss during ForwardAddFeature::execute,
+     * it calls back into C++ → this TS class to compile WGSL and create pipeline.
+     *
+     * The compile flow:
+     * 1. Rust sets compileDefines + setMapNames on the pass
+     * 2. Rust invokes compile callback (C++ → TS)
+     * 3. TS reads compileDefine + setMapNames, generates WGSL, creates LayaXShaderInstance
+     * 4. Returns ProgramHandle to Rust
+     */
+    class LayaXShaderPass implements IShaderPassData {
+        _nativeObj: any;
+        private _pass;
+        private _validDefine;
+        private _renderState;
+        private _compileCallbackBound;
+        private _statefirst;
+        is2D: boolean;
+        name: string;
+        nodeCommonMap: string[];
+        additionShaderData: string[];
+        attributeLocations: Set<number>;
+        constructor(pass: ShaderPass);
+        get pipelineMode(): string;
+        set pipelineMode(value: string);
+        get validDefine(): IDefineDatas;
+        set validDefine(value: IDefineDatas);
+        get renderState(): RenderState;
+        set renderState(value: RenderState);
+        get statefirst(): boolean;
+        set statefirst(value: boolean);
+        syncOwnerUniformMap(): void;
+        /**
+         * Parse set→map name mapping string from Rust.
+         * Format: "0:Scene3D,Global,Shadow;1:BaseCamera;2:Sprite3D"
+         * Returns Map<setIndex, mapNames[]>
+         */
+        private _parseSetMapNames;
+        /**
+         * Parse attribute locations string from Rust.
+         * Format: "0,1,2,5"
+         * Returns Set<number>
+         */
+        private _parseAttributeLocations;
+        /**
+         * Compile callback invoked by Rust on variant cache miss.
+         *
+         * @param defineNamesStr - newline-separated define names from Rust (e.g. "DIRECTIONLIGHT\nSHADOWMAP")
+         * @param setMapNamesStr - set→map name mapping from Rust (format: "0:Scene3D,Global;1:BaseCamera;2:Sprite3D")
+         * @param attributeLocationsStr - attribute locations from Rust (format: "0,1,2,5")
+         * @returns LayaXShaderInstance._nativeObj (C++ LayaXShaderInstance_JS*), C++ extracts handle
+         */
+        /**
+         * Sync pass renderState to Rust.
+         *
+         * 普通 3D 元素仍由 Rust 按 statefirst 决定是否使用 pass state；
+         * CommandBuffer blit / postprocess 的 standalone element 需要 pass state
+         * 作为屏幕 quad 的渲染状态来源。
+         */
+        private _syncRenderState;
+        private _onCompileCallback;
+        setCacheShader(defines: IDefineDatas, shaderInstance: IShaderInstance): void;
+        getCacheShader(defines: IDefineDatas): IShaderInstance;
+        destroy(): void;
+    }
+    class LayaXSimpleSkinRenderNode extends LayaXBaseRenderNode implements ISimpleSkinRenderNode {
+        constructor();
+        setSimpleAnimatorParams(value: Vector4): void;
+        _renderUpdate(context3D: IRenderContext3D): void;
+    }
+    /**
+     * LayaX SkinRenderNode bridge.
+     *
+     * Provides skinned mesh rendering data to the Rust side via `conchLayaXSkinRenderNode`.
+     * Bone transforms and inverse bind poses are pushed to native for GPU skinning.
+     */
+    class LayaXSkinRenderNode extends LayaXBaseRenderNode implements ISkinRenderNode {
+        private boneNums;
+        /** 方案 B：骨骼 entity id 是否已注册给 native（一次性）。setBones 重新绑定时置 false。 */
+        private _bonesRegistered;
+        constructor();
+        computeSkinnedData(): void;
+        setRootBoneTransfom(value: Sprite3D): void;
+        setOwnerTransform(value: Sprite3D): void;
+        setCacheMesh(cacheMesh: Mesh): void;
+        setBones(value: Sprite3D[]): void;
+        setSkinnedData(value: Array<Float32Array[]>): void;
+    }
+    /**
+     * LayaX SpotLight bridge.
+     *
+     * Delegates spot light data to the native `conchLayaXSpotLight` object.
+     */
+    class LayaXSpotLight implements ISpotLightData {
+        private _transform;
+        get transform(): LayaXTransform3D;
+        set transform(value: LayaXTransform3D);
+        get shadowResolution(): number;
+        set shadowResolution(value: number);
+        get shadowDistance(): number;
+        set shadowDistance(value: number);
+        get shadowMode(): ShadowMode;
+        set shadowMode(value: ShadowMode);
+        get shadowStrength(): number;
+        set shadowStrength(value: number);
+        get shadowDepthBias(): number;
+        set shadowDepthBias(value: number);
+        get shadowNormalBias(): number;
+        set shadowNormalBias(value: number);
+        get shadowNearPlane(): number;
+        set shadowNearPlane(value: number);
+        get spotRange(): number;
+        set spotRange(value: number);
+        get spotAngle(): number;
+        set spotAngle(value: number);
+        setDirection(value: Vector3): void;
+        constructor();
+        syncShadow(): void;
+    }
+    /**
+     * LayaX SubShader — Rust-backed SubShader container.
+     *
+     * SubShaderHandle doubles as shader_template_id for the variant cache key.
+     * Holds passes, uniform properties, and instance flag.
+     */
+    class LayaXSubShader implements ISubshaderData {
+        _nativeObj: any;
+        private _shaderName;
+        constructor();
+        get shaderName(): string;
+        set shaderName(value: string);
+        get enableInstance(): boolean;
+        set enableInstance(value: boolean);
+        setUniformMap(_uniformMap: Map<number, UniformProperty>): void;
+        private _pendingUniformMap;
+        private _uniformPropertyIds;
+        private _syncUniformProperties;
+        /** Create global CommandUniformMap for material Set3 using SubShader's uniform properties */
+        private _ensureMaterialMap;
+        addShaderPass(pass: IShaderPassData): void;
+        /** Get the native handle (SubShaderHandle, also serves as shader_template_id) */
+        get handle(): number;
+        destroy(): void;
+    }
+    /**
+     * LayaX Transform3D —— 三端同源方案（world 计算回 JS）。
+     *
+     * 设计（见 Plan/Transform-三端同源最优方案.md）：
+     *   - local TRS 唯一源 = Rust pool（`local_pos/rot/scale` 列）。JS 写 local 经零拷贝视图
+     *     **直写 pool + 标 pool dirty bit**，0 跨语言调用（V8）；OHOS 无 external ArrayBuffer，
+     *     降级为「写共享内存 + 一发 C++ setter 推 pool」。
+     *   - world 读写 / 懒求值 **完全复用基类纯 TS `Transform3D`**（与 WebGL 同一套算法），
+     *     数据源是基类 `_localPosition/_localRotation/_localScale` 字段——这些字段由本类 5 个
+     *     local setter 在写 pool 的同时一并维护，故基类 world 计算取到的恒是最新 local。
+     *     **JS↔C++ 读写 world 0 跨边界。**（故本类不再 override world get/set、_onWorldXxx、
+     *     translate/rotate、flag 读写——全部回落基类纯 TS。）
+     *   - world **结果零拷贝落 pool**：`_bindPool` 把 `_worldMatrix.elements` 绑到 `pool.world_mat`，
+     *     基类 getter 算的 world 直接写 pool，三端共用一份（非零拷贝设备不绑、保持堆走纯 TS）。
+     *   - 路②（高频只读）：`getWorldPositionLastFrame` 直读 Rust 上帧已算的 `pool.world_mat`，
+     *     免 JS 矩阵自算、0 跨边界，容忍 1 帧延迟。
+     *   - Rust 仍独立从 pool.local 算 world_mat 给 GPU（渲染链路不变）。
+     *
+     * **零拷贝视图按 slot 粒度，不映射整个池**：每个 transform 在 createEntity 后向 C++ 取
+     * 「只覆盖自己 slot 那几个 float」的 ArrayBuffer（pos 3 / rot 4 / scale 3 / dirty 1 word /
+     * worldMat 16），建成定长 Float32Array/Uint32Array 直写自己 slot。因 Rust pool 运行期
+     * append-only（block 地址稳定、不 compact），这些视图绑定一次后**终身有效，无需 version 重绑**；
+     * destroyEntity 时丢弃（slot 被 Rust 回收）。
+     *
+     * ⚠ 构造时序铁律（见 memory project_layax_transform_init_order）：基类 ctor 在 `super()`
+     * 期间调 `this._initProperty()`，子类字段初始化器在 `super()` 返回后才执行、会覆盖 `_initProperty`
+     * 里赋的值。故①不重声明 `_localPosition` 等基类字段；②在 `_initProperty` 赋值的子类字段
+     * （`_nativeFloat32Buffer`/`_nativeObj`）不能带 `= 初值`。
+     *
+     * Native class: `conchLayaXTransform`.
+     */
+    class LayaXTransform3D extends Transform3D {
+        static TRANSFORM_LOCALQUATERNION_DATAOFFSET: number;
+        static TRANSFORM_LOCALEULER_DATAOFFSET: number;
+        static TRANSFORM_LOCALPOS_DATAOFFSET: number;
+        static TRANSFORM_LOCALSCALE_DATAOFFSET: number;
+        static TRANSFORM_LOCALMATRIX_DATAOFFSET: number;
+        static TRANSFORM_WORLDQUATERNION_DATAOFFSET: number;
+        static TRANSFORM_WORLDEULER_DATAOFFSET: number;
+        static TRANSFORM_WORLDPOS_DATAOFFSET: number;
+        static TRANSFORM_WORLDSCALE_DATAOFFSET: number;
+        static TRANSFORM_WORLDMATRIX_DATAOFFSET: number;
+        static TRANSFORM_CHANGEFLAG_DATAOFFSET: number;
+        static TRANSFORM_RT_SYNC_FLAG_DATAOFFSET: number;
+        static TRANSFORM_SHARE_MEMORY_SIZE: number;
+        static FLAG_CHANGE_IDX: number;
+        static FLAG_SYNC_IDX: number;
+        static FLAG_MEMORY_SIZE: number;
+        static SYNC_POS: number;
+        static SYNC_ROT: number;
+        static SYNC_SCALE: number;
+        static SYNC_ALL: number;
+        /** 进程级一次性探测：V8 平台 external ArrayBuffer 可用 = true；OHOS = false。 */
+        private static _zeroCopyProbed;
+        private static _hasZeroCopy;
+        /** 临时诊断计数（定位 bind 是否成功后删） */
+        private static _diagN;
+        private _flagU32;
+        private _rotView;
+        private _scaleView;
+        constructor(owner: Sprite3D);
+        protected _initProperty(): void;
+        /**
+         * 在 Rust ECS 创建 entity + 分配 pool slot（C++ 内部完成），随后绑定本 slot 的零拷贝视图。
+         */
+        createEntity(): void;
+        /**
+         * 递归销毁子 entity 后销毁自身，并丢弃本 slot 视图（slot 被 Rust 回收、gen 递增，旧视图禁止再写）。
+         */
+        destroyEntity(): void;
+        /**
+         * 绑定本实例到「自己 slot」的零拷贝视图——只取自己那几个 float，不映射整个池。
+         * OHOS（无零拷贝）保持未绑定，写 local 走 C++ 推。
+         */
+        private _bindPool;
+        /**
+         * Rust ECS entity 是否已创建且存活。
+         */
+        get isEntityValid(): boolean;
+        protected _setTransformFlag(type: number, value: boolean): void;
+        protected _getTransformFlag(type: number): boolean;
+        protected _getTransformChangeFlag(): number;
+        private _pullPos;
+        private _pullRot;
+        private _pullScale;
+        /**
+         * SyncFlag 按分量置位后，按需把「需要 ∩ 仍待拉」的 local 分量拉回 JS 镜像。
+         * need = SYNC_POS|SYNC_ROT|SYNC_SCALE 的任意子集；只拉真正变了且被需要的分量，拉一个清一个 bit。
+         */
+        private _syncLocal;
+        set localPosition(value: Vector3);
+        get localPosition(): Vector3;
+        set localRotation(value: Quaternion);
+        get localRotation(): Quaternion;
+        set localScale(value: Vector3);
+        get localScale(): Vector3;
+        set localRotationEuler(value: Vector3);
+        get localRotationEuler(): Vector3;
+        set localMatrix(value: Matrix4x4);
+        get localMatrix(): Matrix4x4;
+        get localPositionX(): number;
+        set localPositionX(x: number);
+        get localPositionY(): number;
+        set localPositionY(y: number);
+        get localPositionZ(): number;
+        set localPositionZ(z: number);
+        get localScaleX(): number;
+        set localScaleX(value: number);
+        get localScaleY(): number;
+        set localScaleY(value: number);
+        get localScaleZ(): number;
+        set localScaleZ(value: number);
+        get position(): Vector3;
+        set position(value: Vector3);
+        getWorldLossyScale(): Vector3;
+        private _pushLocalPos;
+        private _pushLocalRot;
+        private _pushLocalScale;
+    }
+    /**
+     * LayaX UnitRenderModuleDataFactory
+     *
+     * Creates LayaX (Rust-backed) versions of shader variant system objects.
+     * Replaces RTUintRenderModuleDataFactory for the LayaX rendering path.
+     */
+    class LayaXUnitRenderModuleDataFactory implements IUnitRenderModuleDataFactory {
+        createRenderState(): RenderState;
+        createDefineDatas(): IDefineDatas;
+        createSubShader(): ISubshaderData;
+        createShaderPass(pass: ShaderPass): IShaderPassData;
+    }
+    /**
+     * LayaX VolumetricGI bridge.
+     *
+     * Wraps volumetric global illumination probe data for the Rust rendering
+     * pipeline via `conchLayaXVolumetricGI`.
+     */
+    class LayaXVolumetricGI implements IVolumetricGIData {
+        private static _idCounter;
+        _id: number;
+        private _irradiance;
+        get irradiance(): InternalTexture;
+        set irradiance(value: InternalTexture);
+        private _distance;
+        get distance(): InternalTexture;
+        set distance(value: InternalTexture);
+        private _bound;
+        get bound(): Bounds;
+        set bound(value: Bounds);
+        get intensity(): number;
+        set intensity(value: number);
+        get updateMark(): number;
+        set updateMark(value: number);
+        _shaderData: ShaderData;
+        get shaderData(): ShaderData;
+        set shaderData(value: ShaderData);
+        private _probeCounts;
+        private _probeStep;
+        private _params;
+        constructor();
+        setParams(value: Vector4): void;
+        setProbeCounts(value: Vector3): void;
+        setProbeStep(value: Vector3): void;
+        applyRenderData(): void;
+        destroy(): void;
+    }
+    /**
+     * LayaX Shader compile code utilities.
+     *
+     * Handles GLSL source processing for the LayaX/wgpu backend.
+     * The compilation pipeline mirrors WebGPU: GLSL → SPIR-V → WGSL.
+     *
+     * TODO(Q17): Verify glslang.wasm and naga.wasm work in Conch V8 environment.
+     * TODO(Q18): Determine if shader compilation should be sync or async.
+     */
+    /**
+     * Processes GLSL shader source code for LayaX pipeline.
+     * Handles define injection, include resolution, and format adaptation.
+     */
+    class LayaXShaderCompileCode {
+        /**
+         * Process vertex shader source.
+         * @param vs Raw GLSL vertex shader source
+         * @param defineString Define string to inject
+         * @returns Processed GLSL source ready for compilation
+         */
+        static processVS(vs: string, defineString: string): string;
+        /**
+         * Process fragment shader source.
+         * @param fs Raw GLSL fragment shader source
+         * @param defineString Define string to inject
+         * @returns Processed GLSL source ready for compilation
+         */
+        static processFS(fs: string, defineString: string): string;
+        /**
+         * Inject define directives into GLSL source after the #version line.
+         */
+        private static _injectDefines;
+    }
+    /**
+     * LayaX Shader compile utilities.
+     *
+     * Provides GLSL source adaptation for the LayaX/wgpu backend.
+     * The Rust side compiles GLSL → SPIR-V (glslang) → WGSL (naga),
+     * so the TS side only needs to ensure the GLSL is well-formed for that pipeline.
+     *
+     * TODO(Q17): Verify glslang.wasm and naga.wasm work in Conch V8 environment.
+     * TODO(Q18): Determine if shader compilation should be sync or async.
+     */
+    /**
+     * Utility class for preparing GLSL shader source for the LayaX pipeline.
+     *
+     * Unlike WebGPU which does extensive TS-side preprocessing (sampler splitting,
+     * uniform extraction, etc.), LayaX delegates compilation to the Rust backend.
+     * This util handles only the source-level adaptations needed before handoff.
+     */
+    class LayaXShaderCompileUtil {
+        /**
+         * Strip GLSL ES precision qualifiers (lowp, mediump, highp) from source.
+         * wgpu/naga GLSL parser may not accept precision qualifiers in all contexts.
+         * This keeps `precision` declarations intact (they are valid GLSL) but removes
+         * inline qualifiers on variable declarations and function parameters.
+         */
+        static stripInlinePrecision(source: string): string;
+        /**
+         * Ensure the GLSL source has a #version directive.
+         * If absent, prepend `#version 300 es` for GLSL ES 3.0 compatibility.
+         * The Rust glslang compiler requires a #version directive.
+         */
+        static ensureVersion(source: string, version?: string): string;
+        /**
+         * Process vertex shader source for LayaX pipeline.
+         * Applies define injection and format normalization.
+         */
+        static processVS(vs: string, defineString: string): string;
+        /**
+         * Process fragment shader source for LayaX pipeline.
+         * Applies define injection and format normalization.
+         */
+        static processFS(fs: string, defineString: string): string;
+        /**
+         * Replace GLES 2.0 texture functions with GLES 3.0 equivalents.
+         * The LayaX pipeline targets GLSL ES 3.0+, so legacy functions need updating.
+         * This is a safety net — `GLSLCodeGenerator` should already handle this via
+         * `#define texture2D texture` macros.
+         */
+        static upgradeTextureCalls(source: string): string;
+        /**
+         * Remove GLSL extension directives that are not needed for the wgpu pipeline.
+         * Extensions like GL_EXT_shader_texture_lod are WebGL-specific.
+         */
+        static removeUnsupportedExtensions(source: string): string;
+        /**
+         * Full processing pipeline for a shader source string destined for the Rust backend.
+         * Applies all necessary transformations in order.
+         *
+         * @param source The GLSL source (already processed by GLSLCodeGenerator)
+         * @param isVertex Whether this is a vertex shader
+         * @returns GLSL source ready for the native LayaX compiler
+         */
+        static prepareForNative(source: string, isVertex: boolean): string;
+    }
+    class NoRenderGlobalRenderData implements I2DGlobalRenderData {
+        cullRect: Vector4;
+        renderLayerMask: number;
+        globalShaderData: ShaderData;
+    }
+    class NoRenderGraphics2DBufferBlock implements IGraphics2DBufferBlock {
+        vertexs: IGraphics2DVertexBlock[];
+        indexView: I2DGraphicIndexDataView;
+        vertexBuffer: IVertexBuffer;
+        textureArrayIndex: number;
+    }
+    class NoRenderGraphics2DVertexBlock implements IGraphics2DVertexBlock {
+        positions: number[];
+        vertexViews: I2DGraphicVertexDataView[];
+    }
+    abstract class NoRenderBufferDataView implements I2DGraphicBufferDataView {
+        abstract setData(data: ArrayLike<number>): void;
+        start: number;
+        length: number;
+        owner: NoRenderWholeBuffer;
+        _next: NoRenderBufferDataView;
+        _prev: NoRenderBufferDataView;
+    }
+    class NoRenderVertexDataView extends NoRenderBufferDataView implements I2DGraphicVertexDataView {
+        stride: number;
+        private _view;
+        constructor(owner: NoRenderGraphicVertexBuffer, start: number, length: number, stride?: number);
+        _getData(): Float32Array;
+        _updateView(wholeData: Float32Array): void;
+        _modify(): void;
+        setData(data: ArrayLike<number>): void;
+    }
+    class NoRenderIndexDataView extends NoRenderBufferDataView implements I2DGraphicIndexDataView {
+        protected _view: Uint16Array;
+        _geometry: IRenderGeometryElement;
+        constructor(owner: NoRenderGraphicIndexBuffer, length: number, create?: boolean);
+        setGeometry(value: IRenderGeometryElement): void;
+        setData(data: ArrayLike<number>): void;
+        _updateView(wholeData: Uint16Array): void;
+        destroy(): void;
+    }
+    abstract class NoRenderWholeBuffer implements I2DGraphicWholeBuffer {
+        buffer: IIndexBuffer | IVertexBuffer;
+        _dataView: Float32Array | Uint16Array;
+        arrayBuffer: ArrayBuffer;
+        _needResetData: boolean;
+        _inPass: boolean;
+        protected _num: number;
+        _first: NoRenderBufferDataView;
+        _last: NoRenderBufferDataView;
+        abstract resetData(byteLength: number): void;
+        abstract _upload(): void;
+        _modifyOneView(view: NoRenderBufferDataView): void;
+        addDataView(view: NoRenderBufferDataView): void;
+        removeDataView(view: NoRenderBufferDataView): void;
+        destroy(): void;
+    }
+    class NoRenderGraphicVertexBuffer extends NoRenderWholeBuffer {
+        buffer: IVertexBuffer;
+        _dataView: Float32Array;
+        _first: NoRenderVertexDataView;
+        _last: NoRenderVertexDataView;
+        resetData(byteLength: number): void;
+        _upload(): void;
+    }
+    class NoRenderGraphicIndexBuffer extends NoRenderWholeBuffer {
+        buffer: IIndexBuffer;
+        _dataView: Uint16Array;
+        _first: NoRenderIndexDataView;
+        _last: NoRenderIndexDataView;
+        resetData(byteLength: number): void;
+        _upload(): void;
+    }
+    abstract class NoRenderDataHandleBase implements IRender2DDataHandle {
+        protected _owner: NoRenderStruct2D;
+        protected _nMatrix_0: Vector3;
+        protected _nMatrix_1: Vector3;
+        needUseMatrix: boolean;
+        get owner(): NoRenderStruct2D;
+        set owner(value: NoRenderStruct2D);
+        destroy(): void;
+        inheriteRenderData(context: IRenderContext2D): void;
+    }
+    class NoRenderEmptyDataHandle extends NoRenderDataHandleBase {
+        inheriteRenderData(_context: IRenderContext2D): void;
+        destroy(): void;
+    }
+    class NoRenderPrimitiveDataHandle extends NoRenderDataHandleBase implements I2DPrimitiveDataHandle {
+        logicMatrix: Matrix | null;
+        mask: NoRenderStruct2D | null;
+        private _bufferBlocks;
+        private _modifiedFrame;
+        private _globalAlpha;
+        applyVertexBufferBlock(blocks: IGraphics2DBufferBlock[]): void;
+        skipBufferUpdate(): void;
+        inheriteRenderData(context: IRenderContext2D): void;
+        destroy(): void;
+    }
+    class NoRenderBaseDataHandle extends NoRenderDataHandleBase implements I2DBaseRenderDataHandle {
+        private _lightReceive;
+        get lightReceive(): boolean;
+        set lightReceive(value: boolean);
+        get owner(): NoRenderStruct2D;
+        set owner(value: NoRenderStruct2D);
+    }
+    class NoRenderMeshDataHandle extends NoRenderBaseDataHandle implements IMesh2DRenderDataHandle {
+        private _baseColor;
+        private _tilingOffset;
+        private _baseTexture;
+        private _normal2DTexture;
+        private _renderAlpha;
+        private _normal2DStrength;
+        get baseColor(): Color;
+        set baseColor(value: Color);
+        get baseTexture(): BaseTexture;
+        set baseTexture(value: BaseTexture);
+        get tilingOffset(): Vector4;
+        set tilingOffset(value: Vector4);
+        get normal2DTexture(): BaseTexture;
+        set normal2DTexture(value: BaseTexture);
+        get normal2DStrength(): number;
+        set normal2DStrength(value: number);
+        inheriteRenderData(context: IRenderContext2D): void;
+    }
+    class NoRenderSpineDataHandle extends NoRenderBaseDataHandle implements ISpineRenderDataHandle {
+        private _renderAlpha;
+        private _baseColor;
+        skeleton: spine.Skeleton;
+        private _offset;
+        get baseColor(): Color;
+        set baseColor(value: Color);
+        get offset(): Vector2;
+        set offset(value: Vector2);
+        get owner(): NoRenderStruct2D;
+        set owner(value: NoRenderStruct2D);
+        inheriteRenderData(context: IRenderContext2D): void;
+    }
+    interface StructTransform {
+        matrix: Matrix;
+        modifiedFrame: number;
+    }
+    type ParentData = {
+        clipInfo: IClipInfo;
+        blendMode: BlendMode;
+        globalRenderData: NoRenderGlobalRenderData;
+        pass: NoRender2DPass;
+        enableCulling: boolean;
+        dcOptimize: boolean;
+        globalAlpha: number;
+    };
+    class NoRenderStruct2D implements IRenderStruct2D {
+        owner: Sprite;
+        manualRender: boolean;
+        _parentData: ParentData;
+        _currentData: ParentData;
+        zIndex: number;
+        _effectZ: number;
+        stackingRoot: boolean;
+        rect: Rectangle;
+        private _enableCulling;
+        get enableCulling(): boolean;
+        set enableCulling(value: boolean);
+        get inheritedEnableCulling(): boolean;
+        renderLayer: number;
+        parent: NoRenderStruct2D | null;
+        children: NoRenderStruct2D[];
+        renderType: number;
+        renderUpdateMask: number;
+        private _dcOptimize;
+        get dcOptimize(): boolean;
+        set dcOptimize(value: boolean);
+        get inheritedDcOptimize(): boolean;
+        dcOptimizeEnd: NoRenderStruct2D;
+        trans: StructTransform;
+        get renderMatrix(): Matrix;
+        set renderMatrix(value: Matrix);
+        get globalAlpha(): number;
+        set globalAlpha(value: number);
+        private _alpha;
+        get alpha(): number;
+        set alpha(value: number);
+        private _blendMode;
+        get blendMode(): BlendMode;
+        set blendMode(value: BlendMode);
+        needUploadClip: number;
+        needUploadAlpha: boolean;
+        enabled: boolean;
+        isRenderStruct: boolean;
+        renderElements: IRenderElement2D[];
+        spriteShaderData: ShaderData;
+        private _renderDataHandler;
+        get renderDataHandler(): NoRenderDataHandleBase;
+        set renderDataHandler(value: NoRenderDataHandleBase);
+        _globalShaderData: ShaderData;
+        private _globalRenderData;
+        get globalRenderData(): NoRenderGlobalRenderData;
+        set globalRenderData(value: NoRenderGlobalRenderData);
+        private _updateGlobalShaderData;
+        _pass: NoRender2DPass;
+        _maskParentPass: NoRender2DPass;
+        private _updatePriority;
+        setMaskParentPass(pass: NoRender2DPass): void;
+        get pass(): NoRender2DPass;
+        set pass(value: NoRender2DPass);
+        private _subStruct;
+        get subStruct(): NoRenderStruct2D;
+        set subStruct(value: NoRenderStruct2D);
+        constructor();
+        _clipRect: Rectangle;
+        _clipInfo: IClipInfo;
+        setRenderUpdateCallback(func: Function): void;
+        _handleInterData(): void;
+        private _uniformClip;
+        private _rnUpdateFun;
+        private _setBlendMode;
+        setClipRect(rect: Rectangle): void;
+        private _initClipInfo;
+        private _updateGlobalAlpha;
+        private _updateBlendMode;
+        getClipInfo(): IClipInfo;
+        hasClip(): boolean;
+        private updateChildren;
+        setRepaint(): void;
+        addChild(child: NoRenderStruct2D, index: number): void;
+        updateChildIndex(child: NoRenderStruct2D, oldIndex: number, index: number): void;
+        removeChild(child: NoRenderStruct2D): void;
+        renderUpdate(context: IRenderContext2D): void;
+        destroy(): void;
+    }
+    class NoRender2DPass implements IRender2DPass {
+        _priority: number;
+        get priority(): number;
+        set priority(value: number);
+        enable: boolean;
+        isSupport: boolean;
+        renderTexture: RenderTexture2D;
+        postProcess: PostProcess2D;
+        repaint: boolean;
+        doClearColor: boolean;
+        root: NoRenderStruct2D;
+        offsetMatrix: Matrix;
+        shaderData: ShaderData;
+        private _mask;
+        get mask(): NoRenderStruct2D;
+        set mask(value: NoRenderStruct2D);
+        private _enableBatch;
+        get enableBatch(): boolean;
+        set enableBatch(value: boolean);
+        constructor();
+        setClearColor(r: number, g: number, b: number, a: number): void;
+        needRender(): boolean;
+        fowardRender(context: IRenderContext2D, renderTime: number): void;
+        private _walkAndRenderUpdate;
+        updatePostProcess(): void;
+        destroy(): void;
+    }
+    class NoRender2DPassManager implements IRender2DPassManager {
+        private _modify;
+        private _passes;
+        addPass(pass: NoRender2DPass): void;
+        removePass(pass: NoRender2DPass): void;
+        apply(context: IRenderContext2D, renderTime: number): void;
+        clear(): void;
+    }
     class NoRender2DProcess implements I2DRenderPassFactory {
         createGraphic2DBufferBlock(): IGraphics2DBufferBlock;
         createGraphic2DVertexBlock(): IGraphics2DVertexBlock;
@@ -56187,6 +59133,11 @@ declare namespace Laya {
         globalShaderData: ShaderData;
         destroy(): void;
     }
+    class NoRenderPrimitiveRenderElement2D extends NoRenderElement2D implements IPrimitiveRenderElement2D {
+        typeKey: number;
+        textureKey: number;
+        primitiveShaderData: ShaderData;
+    }
     class NoRenderContext2D implements IRenderContext2D {
         passData: ShaderData;
         getRenderTarget(): InternalRenderTarget;
@@ -56211,8 +59162,23 @@ declare namespace Laya {
     class NoRenderSetRendertarget2DCMD extends SetRendertarget2DCMD {
         apply(context: IRenderContext2D): void;
     }
+    class NoRender3DModuleFactory implements I3DRenderModuleFactory {
+        createTransform(owner: Sprite3D): Transform3D;
+        createBounds(min: Vector3, max: Vector3): any;
+        createVolumetricGI(): IVolumetricGIData;
+        createReflectionProbe(): IReflectionProbeData;
+        createLightmapData(): ILightMapData;
+        createDirectLight(): IDirectLightData;
+        createSpotLight(): ISpotLightData;
+        createPointLight(): IPointLightData;
+        createCameraModuleData(): ICameraNodeData;
+        createSceneModuleData(): ISceneNodeData;
+        createBaseRenderNode(): IBaseRenderNode;
+        createMeshRenderNode(): IMeshRenderNode;
+        createSkinRenderNode(): ISkinRenderNode;
+        createSimpleSkinRenderNode(): ISimpleSkinRenderNode;
+    }
     class NoRender3DRenderPassFactory implements I3DRenderPassFactory {
-        createMeshRenderBatchModule(): IBatchModuleAgent;
         createComputeCommandAppatchCMD?(): ComputeCommandAppatchCMD;
         createRender3DProcess(): IRender3DProcess;
         createRenderContext3D(): IRenderContext3D;
@@ -56361,6 +59327,20 @@ declare namespace Laya {
         constructor();
         apply(context: NoRenderRenderContext3D): void;
     }
+    class NoRenderDefineDatas implements IDefineDatas {
+        _mask: Array<number>;
+        _length: number;
+        _intersectionDefineDatas(define: IDefineDatas): void;
+        add(define: ShaderDefine): boolean;
+        remove(define: ShaderDefine): boolean;
+        addDefineDatas(define: IDefineDatas): void;
+        removeDefineDatas(define: IDefineDatas): void;
+        has(define: ShaderDefine): boolean;
+        clear(): void;
+        cloneTo(destObject: IDefineDatas): void;
+        clone(): IDefineDatas;
+        destroy(): void;
+    }
     class NoRenderDeviceFactory implements IRenderDeviceFactory {
         createShaderInstance(shaderProcessInfo: ShaderProcessInfo, shaderPass: ShaderCompileDefineBase): IShaderInstance;
         createIndexBuffer(bufferUsage: BufferUsage): IIndexBuffer;
@@ -56426,7 +59406,7 @@ declare namespace Laya {
         destroy(): void;
     }
     class NoRenderShaderData extends ShaderData {
-        getDefineData(): WebDefineDatas;
+        getDefineData(): NoRenderDefineDatas;
         /**
          * @ignore
          */
@@ -56726,6 +59706,19 @@ declare namespace Laya {
         setTexture3DPixelsData(texture: InternalTexture, source: ArrayBufferView, depth: number, premultiplyAlpha: boolean, invertY: boolean): void;
         setTexture3DSubPixelsData(texture: InternalTexture, source: ArrayBufferView, mipmapLevel: number, generateMipmap: boolean, xOffset: number, yOffset: number, zOffset: number, width: number, height: number, depth: number, premultiplyAlpha: boolean, invertY: boolean): void;
     }
+    class NoRenderSubShader implements ISubshaderData {
+        shaderName: string;
+        enableInstance: boolean;
+        addShaderPass(pass: IShaderPassData): void;
+        setUniformMap(_uniformMap: Map<number, any>): void;
+        destroy(): void;
+    }
+    class NoRenderUnitModuleDataFactory {
+        createSubShader(): NoRenderSubShader;
+        createShaderPass(pass: ShaderPass): IShaderPassData;
+        createRenderState(): RenderState;
+        createDefineDatas(): NoRenderDefineDatas;
+    }
     class GLESSetRendertarget2DCMD extends SetRendertarget2DCMD {
         _nativeObj: any;
         protected _rt: GLESInternalRT;
@@ -56804,6 +59797,8 @@ declare namespace Laya {
         set offsetScale(value: Vector4);
     }
     class GLESPrimitiveRenderElement2D extends GLESRenderElement2D implements IPrimitiveRenderElement2D {
+        private _typeKey;
+        private _textureKey;
         /**
          * @en Type key proxied to native object's type field.
          * @zh 类型键代理到原生对象的 type 字段。
@@ -57767,7 +60762,7 @@ declare namespace Laya {
         offsetMatrix: Matrix;
         needRender(): boolean;
         setClearColor(r: number, g: number, b: number, a: number): void;
-        fowardRender(context: IRenderContext2D): void;
+        fowardRender(context: IRenderContext2D, renderTime: number): void;
         updatePostProcess(): void;
         destroy(): void;
     }
@@ -57775,7 +60770,7 @@ declare namespace Laya {
     interface IRender2DPassManager {
         addPass(pass: IRender2DPass): void;
         removePass(pass: IRender2DPass): void;
-        apply(context: IRenderContext2D): void;
+        apply(context: IRenderContext2D, renderTime: number): void;
         clear(): void;
     }
     /** @ignore @blueprintIgnore */
@@ -58355,12 +61350,12 @@ declare namespace Laya {
         get offsetMatrix(): Matrix;
         needRender(): boolean;
         setClearColor(r: number, g: number, b: number, a: number): void;
-        constructor();
+        constructor(skipNative?: boolean);
         /**
          * pass 2D 渲染
          * @param context
          */
-        fowardRender(context: GLESRenderContext2D): void;
+        fowardRender(context: GLESRenderContext2D, renderTime: number): void;
         updatePostProcess(): void;
         private _getRenderCMDArray;
         destroy(): void;
@@ -58369,7 +61364,7 @@ declare namespace Laya {
         _nativeObj: any;
         constructor();
         removePass(pass: RTRender2DPass): void;
-        apply(context: GLESRenderContext2D): void;
+        apply(context: GLESRenderContext2D, renderTime: number): void;
         clear(): void;
         addPass(pass: RTRender2DPass): void;
     }
@@ -59352,7 +62347,10 @@ declare namespace Laya {
         private _shaderName;
         get shaderName(): string;
         set shaderName(value: string);
+        private _pendingUniformMap;
+        private _uniformPropertyIds;
         setUniformMap(_uniformMap: Map<number, UniformProperty>): void;
+        private _syncUniformProperties;
         get enableInstance(): boolean;
         set enableInstance(value: boolean);
         destroy(): void;
@@ -59389,6 +62387,35 @@ declare namespace Laya {
          */
         static registerProvider(renderType: number, cls: new () => IBatch2DProvider): void;
         static createProvider(renderType: number): IBatch2DProvider;
+    }
+    type SequenceFrame2DElement = IRenderElement2D & {
+        _sequenceFrame2DRender?: SequenceFrame2DRender;
+    };
+    /**
+     * @en Batches SequenceFrame2DRender elements with GPU instancing.
+     * @zh 使用 GPU Instance 合批渲染 SequenceFrame2DRender。
+     */
+    class SequenceFrame2DInstanceBatch implements IBatch2DProvider {
+        /** @en Batch records waiting for recovery. @zh 待回收的合批信息。 */
+        private _recoverList;
+        /**
+         * @en Registers the 2D sequence-frame batch provider.
+         * @zh 注册 2D 序列帧合批器。
+         */
+        static __init__(): void;
+        batch(list: FastSinglelist<IRenderElement2D>, start: number, end: number, allowReorder?: boolean): void;
+        reset(): void;
+        destroy(): void;
+        check(left: SequenceFrame2DElement, right: SequenceFrame2DElement): boolean;
+        recover(): void;
+        /** @en Builds one instanced batch range. @zh 构建一个实例合批区间。 */
+        private _batchInternal;
+        private _isContiguousInstanceIDRange;
+        private _copyRuntimeData;
+        private _copyConfigData;
+        private _copySharedDataRuns;
+        /** @en Hashes config versions for upload reuse. @zh 计算配置版本哈希以复用上传。 */
+        private _getConfigHash;
     }
     abstract class Web2DGraphicWholeBuffer implements I2DGraphicWholeBuffer {
         buffer: IIndexBuffer | IVertexBuffer;
@@ -59575,7 +62602,7 @@ declare namespace Laya {
          * pass 2D 渲染
          * @param context
          */
-        fowardRender(context: IRenderContext2D): void;
+        fowardRender(context: IRenderContext2D, renderTime: number): void;
         private fillRenderElements;
         private batch;
         private getBatchProvider;
@@ -59591,7 +62618,7 @@ declare namespace Laya {
         private _modify;
         private _passes;
         removePass(pass: WebRender2DPass): void;
-        apply(context: IRenderContext2D): void;
+        apply(context: IRenderContext2D, renderTime: number): void;
         clear(): void;
         addPass(pass: WebRender2DPass): void;
     }
@@ -65862,6 +68889,7 @@ declare namespace Laya {
         static PERIOD_CAMERA: number;
         /**shader变量提交周期，逐场景。*/
         static PERIOD_SCENE: number;
+        static SHADERDEFINE_STORAGEBUFFER: ShaderDefine;
         static _preCompileShader: {
             [key: string]: Shader3D;
         };
@@ -66002,10 +69030,16 @@ declare namespace Laya {
         compileAll(): void;
         destroy(): void;
     }
+    type UniformMeta = {
+        type: ShaderDataType;
+        format?: string;
+        access?: 'readonly' | 'writeonly' | 'readwrite';
+    };
+    type UniformMapEntry = ShaderDataType | UniformMeta | {
+        [uniformName: string]: ShaderDataType | UniformMeta;
+    };
     type UniformMapType = {
-        [blockName: string]: {
-            [uniformName: string]: ShaderDataType;
-        } | ShaderDataType;
+        [blockName: string]: UniformMapEntry;
     };
     type AttributeMapType = {
         [name: string]: [
@@ -67418,6 +70452,42 @@ declare namespace Laya {
          * @returns 检索到的纹理。
          */
         getTexture(name: string): BaseTexture;
+        /**
+         * @en Sets a storage buffer (SSBO) by its uniform index.
+         * @param uniformIndex The index of the property.
+         * @param buffer The storage buffer to bind, or null to clear.
+         * @zh 通过属性索引设置 storage buffer (SSBO)。
+         * @param uniformIndex 属性索引。
+         * @param buffer 要绑定的 storage buffer,传 null 解绑。
+         */
+        setDeviceBufferByIndex(uniformIndex: number, buffer: IDeviceBuffer): void;
+        /**
+         * @en Retrieves a storage buffer (SSBO) by its uniform index.
+         * @param uniformIndex The index of the property.
+         * @returns The bound storage buffer, or null if none.
+         * @zh 通过属性索引获取 storage buffer (SSBO)。
+         * @param uniformIndex 属性索引。
+         * @returns 已绑定的 storage buffer,未绑定返回 null。
+         */
+        getDeviceBufferByIndex(uniformIndex: number): IDeviceBuffer;
+        /**
+         * @en Sets a storage buffer (SSBO) by property name.
+         * @param name The name of the property.
+         * @param buffer The storage buffer to bind, or null to clear.
+         * @zh 根据属性名称设置 storage buffer (SSBO)。
+         * @param name 属性名称。
+         * @param buffer 要绑定的 storage buffer,传 null 解绑。
+         */
+        setDeviceBuffer(name: string, buffer: IDeviceBuffer): void;
+        /**
+         * @en Retrieves a storage buffer (SSBO) by property name.
+         * @param name The name of the property.
+         * @returns The bound storage buffer, or null if none.
+         * @zh 根据属性名称获取 storage buffer (SSBO)。
+         * @param name 属性名称。
+         * @returns 已绑定的 storage buffer,未绑定返回 null。
+         */
+        getDeviceBuffer(name: string): IDeviceBuffer;
         /**
          * @en Retrieves a buffer by its uniform index.
          * @param uniformIndex The index of the property.
@@ -69462,6 +72532,11 @@ declare namespace Laya {
          */
         disableCache(): void;
         /**
+         * @zh 清理渲染器内部缓存的材质列表。
+         * @en Clear the renderer's cached material lists.
+         */
+        clearCacheMaterials(): void;
+        /**
          * 设置插槽纹理
          * @param slotName
          * @param texture
@@ -69728,6 +72803,7 @@ declare namespace Laya {
          * @en Disable cache.
          */
         disableCache(): void;
+        clearCacheMaterials(): void;
     }
     /**
      * @en Native Spine Templet Parser for parsing Spine skeleton and atlas data.
@@ -70162,6 +73238,7 @@ declare namespace Laya {
          * @param force Whether to force delete all audio channels.
          */
         private _onAniSoundStoped;
+        private onSpineMaterialChange;
         /**
          * @zh 添加一个动画
          * @param nameOrIndex   动画名字或者索引
@@ -70267,6 +73344,11 @@ declare namespace Laya {
         private static _tempCameraUp;
         private static _tempCameraForward;
         protected _spineRender: ISpineRender;
+        /**
+         * @zh 物理更新模式。
+         * @en The physics update mode.
+         **/
+        physicsUpdate: number;
         protected _source: string;
         protected _templet: SpineTemplet;
         protected _maxDeltaTime: number;
@@ -70300,6 +73382,9 @@ declare namespace Laya {
         private _cacheMoved;
         private _worldParams;
         private _playAudio;
+        private _skeletonPosition;
+        private _lastSkeletonWorldPosition;
+        private _hasSkeletonWorldPosition;
         get renderSize(): Vector2;
         set renderSize(value: Vector2);
         /**
@@ -70485,6 +73570,9 @@ declare namespace Laya {
          * @en Transform changed, update the skeleton position.
          */
         private onTransformChanged;
+        private _resetSkeletonPosition;
+        private _syncSkeletonPosition;
+        private _isPhysicsSyncEnabled;
         /**
          * @zh 替换插槽皮肤
          * @param slotName 插槽名称
@@ -70499,6 +73587,7 @@ declare namespace Laya {
          * @en Clear method, used to release and reset related resources.
          */
         clear(): void;
+        private onSpineMaterialChange;
         /**
          * @ignore @blueprintIgnore
          * @zh 销毁当前对象
@@ -70841,6 +73930,9 @@ declare namespace Laya {
         normal = 1,
         rigidBody = 2
     }
+    type TSpineMaterialMap = Record<string, Material | null>;
+    type TSpineMaterialTextureMap = Record<string, string>;
+    type TSpineMaterialDimension = "2D" | "3D";
     /**
      * @en Base class for Spine animation template
      * @zh Spine动画模板基类
@@ -70851,6 +73943,10 @@ declare namespace Laya {
          * @zh Spine动画中使用的材质映射
          */
         materialMap: Map<string, Material>;
+        private _spineMaterials2D;
+        private _spineMaterials3D;
+        private _spineMaterialTextures;
+        private _spineMaterialTextureKeys;
         /**
          * @en X of spine data
          * @zh spine 数据 x
@@ -70890,6 +73986,31 @@ declare namespace Laya {
          */
         get premultipliedAlpha(): boolean;
         /**
+         * @en External material remaps for Spine 2D render slots.
+         * @zh Spine 2D 渲染槽位的外部材质映射。未设置或无效时回退到内部默认材质。
+         */
+        get spineMaterials2D(): TSpineMaterialMap;
+        set spineMaterials2D(value: TSpineMaterialMap);
+        /**
+         * @en External material remaps for Spine 3D render slots.
+         * @zh Spine 3D 渲染槽位的外部材质映射。未设置或无效时回退到内部默认材质。
+         */
+        get spineMaterials3D(): TSpineMaterialMap;
+        set spineMaterials3D(value: TSpineMaterialMap);
+        /**
+         * @en Stable texture key to Spine texture name map used by external material remaps.
+         * @zh 外部材质映射使用的稳定贴图 id 到 Spine 贴图名称映射。
+         */
+        get spineMaterialTextures(): TSpineMaterialTextureMap;
+        set spineMaterialTextures(value: TSpineMaterialTextureMap);
+        /**
+         * @en Notify renderers that external Spine material remaps changed.
+         * @zh 通知渲染器外部 Spine 材质映射发生变化。
+         */
+        onSpineMaterialsChanged(): void;
+        private _getSpineMaterialByKey;
+        private _getSpineMaterialKey;
+        /**
          * @en Get or create a material for the given texture and blend mode
          * @param texture The texture to use
          * @param blendMode The blend mode to use
@@ -70917,6 +74038,9 @@ declare namespace Laya {
          * @param texture Texture object, corresponding to TextureRegion
          */
         registerTexture(texture: Texture): void;
+        private _refreshSpineMaterialTextureKeys;
+        private _registerSpineMaterialTexture;
+        private _addSpineMaterialTextureKey;
         /**
          * @en Get the animation name by its index
          * @param index The index of the animation
@@ -70962,6 +74086,15 @@ declare namespace Laya {
          */
         protected _disposeResource(): void;
     }
+    type TSpineMaterialRef = string | {
+        "_$uuid"?: string;
+    } | null;
+    interface ISpineRuntimeData {
+        source?: string;
+        spineMaterialTextures?: Record<string, string>;
+        spineMaterials2D?: Record<string, TSpineMaterialRef>;
+        spineMaterials3D?: Record<string, TSpineMaterialRef>;
+    }
     /**
      * @en SpineTempletLoader class used for loading Spine skeleton data and atlas.
      * @zh SpineTempletLoader 类用于加载 Spine 骨骼数据和图集。
@@ -70973,7 +74106,15 @@ declare namespace Laya {
          * @zh 加载 Spine 骨骼数据和图集。
          * @param task 加载任务。
          */
-        load(task: ILoadTask): Promise<import("./SpineTemplet").SpineTemplet>;
+        load(task: ILoadTask): Promise<SpineTemplet>;
+        private loadSpineSource;
+        private loadSpineSourceResolved;
+        private loadRuntimeMeta;
+        static applyRuntimeData(templet: SpineTemplet, data: ISpineRuntimeData, task?: ILoadTask): Promise<SpineTemplet>;
+        private static loadMaterialMap;
+        private static getRuntimeMaterialKey;
+        private static getTextureByStorageKey;
+        private static getMaterialURL;
     }
     /**
      * @en Unified Spine buffer view that holds its own vertex and index data
@@ -72610,6 +75751,7 @@ declare namespace Laya {
         complete(): void;
         enableCache(): void;
         disableCache(): void;
+        clearCacheMaterials(): void;
         setSlotTexture(slotName: string, texture: Texture, createAttachment: boolean): void;
         setTempletAttachment(templet: SpineTemplet, targetSlotName: string, skinName: string, attachmentName: string): void;
     }
@@ -79658,6 +82800,7 @@ declare namespace Laya {
         protected _ty: number;
         protected _maxMove: number;
         protected _globalSacle: Point;
+        private _startValue;
         /**
          * @en Creates an instance of Slider.
          * @param skin The skin.
@@ -83701,7 +86844,7 @@ declare namespace Laya {
         protected _sizeChanged(changeByLayout?: boolean): void;
         protected _childChanged(child?: Sprite): void;
         /** @ignore */
-        _processVisible(): boolean;
+        _processVisible(parentVisible?: boolean): boolean;
         /**
          * @en Sets the layout changed flag for the widget.
          * @param reason Optional. The reason for the layout change, such as size, position, etc.
@@ -88285,6 +91428,1506 @@ declare namespace Laya {
         static create(module: Function, wasmFile?: string): Function;
         static locateFileDefault(path: string, scriptDirectory?: string): string;
     }
+    enum VFXEventType {
+        Event = 0,
+        Initialize = 1,
+        Simulate = 2
+    }
+    class VFXEvent {
+        static OnPlayEventID: number;
+        static OnStopEventID: number;
+        static init(): void;
+        type: VFXEventType;
+        id: number;
+        attribute: VFXEventAttribute | null;
+        constructor(type?: VFXEventType, id?: number);
+        /**
+         * 重置事件数据
+         */
+        reset(type: VFXEventType, id: number): void;
+    }
+    /**
+     * VFX 事件对象池
+     * 用于高效地创建和回收事件对象，减少 GC 压力
+     */
+    class VFXEventPool {
+        private pool;
+        private maxPoolSize;
+        private attributePool;
+        /**
+         * @param maxPoolSize 对象池最大容量，默认 100
+         */
+        constructor(maxPoolSize?: number);
+        /**
+         * 从对象池获取一个事件对象
+         * 如果池中没有可用对象，则创建新对象
+         */
+        acquire(type: VFXEventType, id: number): VFXEvent;
+        /**
+         * 从 attribute 池借用一个 attribute
+         * @param desc 属性布局描述，池为空时用于创建新 attribute
+         */
+        acquireAttribute(desc: VFXEventAttributeDesc): VFXEventAttribute;
+        /**
+         * 回收事件对象到对象池
+         * 如果事件带有 attribute，归还给 attribute 池
+         */
+        recycle(evt: VFXEvent): void;
+        /**
+         * 批量回收事件对象
+         */
+        recycleAll(events: Array<VFXEvent>): void;
+        /**
+         * 清空对象池
+         */
+        clear(): void;
+        /**
+         * 获取对象池当前大小
+         */
+        get size(): number;
+    }
+    class VFXEventQueue {
+        private evtLists;
+        private eventPool;
+        private currentIndex;
+        /**
+         * @param poolSize 对象池大小，默认 100
+         */
+        constructor(poolSize?: number);
+        getCurrentList(): Array<VFXEvent>;
+        getPreviousList(): Array<VFXEvent>;
+        /**
+         * 推送事件到队列
+         * 若传入 attribute，从 attribute 池借用并拷贝数据
+         * 若未传入，event.attribute 为 null
+         */
+        push(id: number, type?: VFXEventType, attribute?: VFXEventAttribute): void;
+        empty(): boolean;
+        /**
+         * 清空列表并回收事件对象到对象池
+         */
+        private clearList;
+        clear(): void;
+        swap(): void;
+        destroy(): void;
+    }
+    class VFXShaderInit {
+        static init(): void;
+    }
+    /**
+     * VFX → ShaderGraph 之间 operator chain 的 runtime evaluator。
+     *
+     * Unity VFX Graph 中 OutputContext 的 shader uniform（如 _MainTextureColor）可以接到
+     * operator chain（SampleGradient/SampleCurve/Math 等），每帧求值后写到 material。
+     * 转换器把这些 chain 序列化到 .lvfx 的 shaderPropertyExpressions，runtime 这里 evaluate。
+     *
+     * 不支持 per-particle attribute (AgeOverLifetime 等) — 用 GlobalTimeRatio 近似 (mod(time,1))。
+     */
+    interface ExprNode {
+        kind: string;
+        outputType: string;
+        value?: any;
+        exposedName?: string;
+        defaultValue?: any;
+        inputs?: string[];
+    }
+    interface ExprGraph {
+        rootNodeId: string;
+        outputType: string;
+        nodes: {
+            [id: string]: ExprNode;
+        };
+    }
+    interface GradientData {
+        colorKeys: Array<{
+            color: {
+                r: number;
+                g: number;
+                b: number;
+                a: number;
+            };
+            time: number;
+        }>;
+        alphaKeys: Array<{
+            alpha: number;
+            time: number;
+        }>;
+        mode?: number;
+    }
+    interface CurveData {
+        frames: Array<{
+            time: number;
+            value: number;
+            inTangent: number;
+            outTangent: number;
+        }>;
+        preWrapMode?: number;
+        postWrapMode?: number;
+    }
+    interface ExprEvalContext {
+        totalTime: number;
+        deltaTime: number;
+        /** runtime VFXParameter 实际值 map: exposedName → cached value (含 Prefab/Inspector override 后的 Gradient/Curve/Vector 等) */
+        propertyValues?: Map<string, {
+            cached: any;
+            value?: number[];
+        }>;
+        /** 当前 effect 是否含 ConstantRate/PeriodicBurst/VariableRate 持续 spawn (区别于纯 SingleBurst).
+         *  决定 GlobalTimeRatio 行为: SingleBurst-only 用 cap min(t,1) 跟首批粒子 age 偶然同步,
+         *  持续 spawn 用 mod 1 让 cycle 持续 (避免 t>1 后 Disappear=1 让所有粒子永远不可见). */
+        hasContinuousSpawn?: boolean;
+    }
+    class ShaderExpressionEvaluator {
+        /** evaluate 单个 expression graph，返回 root 节点的求值结果 */
+        static evaluate(graph: ExprGraph, ctx: ExprEvalContext): any;
+        private static _evalNode;
+        /** Gradient sample lerp — 支持两种格式：
+         *  Unity {colorKeys:[{color,time}], alphaKeys:[{alpha,time}]}
+         *  Laya  {__layaGradientStops:[{time,r,g,b,a}]} (color+alpha 同 stop)
+         */
+        private static _sampleGradient;
+        /** Unity AnimationCurve sample — 简化 linear lerp（不算 Hermite tangent，足够多数 material uniform 用例） */
+        private static _sampleCurve;
+        private static _binOp;
+        private static _lerp;
+        /** 把求值结果转 Vector4（用于 setVector 到 ShaderData） */
+        static toVector4(v: any, out?: Vector4): Vector4;
+    }
+    function ensureIDs(): void;
+    class VFXParticleSystem extends VFXSystem {
+        /**
+         * 关联的SpawnerSystem索引列表
+         */
+        spawnerSystems: number[];
+        boundsMode: VFXBoundsMode;
+        boundsCenter: Vector3;
+        boundsExtents: Vector3;
+        private _cameraParams;
+        private _cameraParams2;
+        private _cameraParams3;
+        simulateSpace: VFXSimulateSpace;
+        receiveGPUEvent: boolean;
+        gpuEventInput: VFXGPUEventInput | null;
+        gpuEventSourceSystem: VFXParticleSystem | null;
+        gpuEventType: VFXGPUEventType | null;
+        gpuEventReceiverCount: number;
+        eventIndexBuffers: DeviceBuffer[];
+        gpuEventBufferIndex: number;
+        gpuEventAccumulatorBuffer: DeviceBuffer | null;
+        initializeShader: ComputeShader;
+        updateShader: ComputeShader;
+        outputShader: ComputeShader;
+        prepareDispatchShader: ComputeShader;
+        prepareDispatchDatas: ShaderData[];
+        gpuEventDispatchBuffer: DeviceBuffer | null;
+        capacity: number;
+        attributeBytesPerParticle: number;
+        mesh: Mesh;
+        outputType: string;
+        get isStripOutput(): boolean;
+        particlePerStripCount: number;
+        stripCapacity: number;
+        blendMode: import("../VFXAsset").VFXBlendMode;
+        softParticleFade: number;
+        uvMode: string;
+        flipbookSize: Vector2;
+        mainTexture: string;
+        subpixelAA: boolean;
+        stripColorMapping: string;
+        stripUvScale: {
+            x: number;
+            y: number;
+        };
+        stripUvBias: {
+            x: number;
+            y: number;
+        };
+        stripGradientStops: {
+            t: number;
+            color: [
+                number,
+                number,
+                number,
+                number
+            ];
+        }[];
+        stripTilingMode: string;
+        customShaderName: string;
+        billboardPrimitive: string;
+        billboardVertexCount: number;
+        billboardCropFactor: number;
+        useAlphaClipping: boolean;
+        alphaThreshold: number;
+        get isBillboardProcedural(): boolean;
+        /** Billboard / Cube / Distortion procedural：都走 VFXBillboardGeometry + gl_VertexID */
+        get isProceduralGeometry(): boolean;
+        /** Distortion mode: "Procedural" (默认径向) / "NormalMap" */
+        distortionMode: string;
+        stripVertexBuffer: DeviceBuffer | null;
+        stripDataBuffer: DeviceBuffer | null;
+        updateStripsShader: ComputeShader | null;
+        updateStripsDatas: ShaderData[] | null;
+        useStripRingBuffer: boolean;
+        spawnedCount: number;
+        eventCount: number;
+        /** 本系统历史上已成功 Initialize 的粒子总数（用于 spawnIndex / particleId 与 Unity 对齐） */
+        private _cumulativeSpawnTotal;
+        maxEventsPerFrame: number;
+        private sourceAttributeStaging;
+        private prefixSumStaging;
+        private spawnCountsPerEvent;
+        dispatch: Vector3;
+        initializeDatas: ShaderData[];
+        updateDatas: ShaderData[];
+        outputDatas: ShaderData[];
+        extraOutputs: Array<{
+            outputShader: ComputeShader;
+            outputDatas: ShaderData[];
+            renderBuffer: DeviceBuffer;
+            indirectBuffer: DeviceBuffer;
+            geometry: GeometryElement;
+            outputType: string;
+            blendMode: string;
+            softParticleFade: number;
+            uvMode: string;
+            flipbookSize: Vector2;
+            subpixelAA: boolean;
+            customShaderName: string;
+            mesh: Mesh;
+            billboardPrimitive?: string;
+            billboardVertexCount?: number;
+            billboardCropFactor?: number;
+            useAlphaClipping?: boolean;
+            alphaThreshold?: number;
+            tilingMode?: string;
+            colorMapping?: string;
+            uvScale?: {
+                x: number;
+                y: number;
+            };
+            uvBias?: {
+                x: number;
+                y: number;
+            };
+            mainTexture?: string;
+        }>;
+        deadListBuffer: DeviceBuffer;
+        aliveListBufferRead: DeviceBuffer;
+        aliveListBufferWrite: DeviceBuffer;
+        attributeBuffer: DeviceBuffer;
+        renderBuffer: DeviceBuffer;
+        indirectBuffer: DeviceBuffer;
+        sourceAttributeBuffer: DeviceBuffer;
+        prefixSumBuffer: DeviceBuffer;
+        geometry: VFXGeometry | VFXStripGeometry | VFXPointGeometry | VFXLineGeometry | VFXLineStripGeometry | VFXBillboardGeometry;
+        boundsBuffer: DeviceBuffer;
+        boundsStagingBuffer: DeviceBuffer;
+        private boundsResetData;
+        private boundsReadbackDest;
+        private boundsReadbackPending;
+        private boundsDataView;
+        private _released;
+        private eventIndexBufferIDs;
+        outputEventDescs: VFXOutputEventDesc[];
+        outputEventBuffers: DeviceBuffer[];
+        private outputEventStagingBuffers;
+        private outputEventBufferIDs;
+        private outputEventReadbackDest;
+        private outputEventReadbackPending;
+        private outputEventAccumulatorBuffer;
+        private outputEventAccumulatorBufferID;
+        private outputEventAccumulatorSlots;
+        constructor();
+        /**
+         * 创建 Output Event 资源（缓冲 + staging + accumulator）
+         * 在 init() 中根据 outputEventDescs 调用一次
+         */
+        private setupOutputEventBuffers;
+        /**
+         * Update 阶段后，将 OutputEventBuffer 拷贝到 staging（与 bounds 同批次提交）
+         */
+        copyOutputEventsToStaging(cmd: ComputeCommandBuffer): void;
+        /**
+         * 异步回读 OutputEventBuffer，解析后调用 callback 派发事件
+         * @param dispatch (eventName, entries[]) => void  其中 entries 是已解析为对象数组
+         */
+        requestOutputEventReadback(dispatch: (eventName: string, entries: Array<any>) => void): void;
+        private _dispatchOutputEvent;
+        /**
+         * 创建一个新的 EventIndexBuffer，返回其在数组中的索引
+         * 每个接收系统调用一次，获得独立的事件缓冲
+         */
+        addEventIndexBuffer(maxEntries: number): number;
+        /**
+         * 创建 GPU 事件累加器缓冲（所有事件类型通用，每个接收系统注册时调用）
+         * 每粒子每事件 1 个 float，shader 中通过 acc += triggerValue 累加到 >= 1.0 时触发
+         */
+        ensureAccumulatorBuffer(): void;
+        private initSourceAttributes;
+        private releaseSourceAttributes;
+        /**
+         * 设置各阶段共享的 uniform（每帧调用一次，赋值给所有 shaderData）
+         */
+        private _allShaderDatas;
+        getAllShaderDatas(): ShaderData[];
+        setCommonUniforms(state: VFXState, camera: Camera): void;
+        private _invVP;
+        /**
+         * 通过 cmd 设置当前渲染相机的位置和朝向到 output shader
+         */
+        setOrientCamera(cmd: ComputeCommandBuffer, cameraWorldPos: Vector3, cameraForward: Vector3): void;
+        init(): void;
+        receiveInitializeEvent(attr: VFXEventAttribute): void;
+        /**
+         * 阶段1: Update — 更新现有粒子（物理、生命、死亡回收）
+         * 源系统的 Update shader 同时写入 EventIndexBuffer
+         */
+        updatePhase(state: VFXState, cmd: ComputeCommandBuffer): void;
+        /**
+         * 阶段2: Initialize — CPU 或 GPU 事件驱动的粒子生成
+         */
+        initializePhase(state: VFXState, cmd: ComputeCommandBuffer): void;
+        /**
+         * 阶段3: Output — 压缩输出到 RenderBuffer
+         */
+        private _outputLogOnce;
+        outputPhase(state: VFXState, cmd: ComputeCommandBuffer): void;
+        /**
+         * UpdateStrips phase: advance ring buffer pointers after Update
+         */
+        updateStripsPhase(cmd: ComputeCommandBuffer): void;
+        private initializeFromCPUEvent;
+        private initializeFromGPUEvent;
+        update(state: VFXState, cmd: ComputeCommandBuffer): void;
+        private swapAliveListBuffers;
+        /**
+         * 重置 BoundsBuffer 为 INT_MAX/INT_MIN（在 Output dispatch 之前调用）
+         */
+        resetBoundsBuffer(): void;
+        /**
+         * 将 BoundsBuffer 拷贝到 StagingBuffer（在 Output dispatch 之后、同批次提交）
+         * 当 staging buffer 正在被映射读取时跳过
+         */
+        copyBoundsToStaging(cmd: ComputeCommandBuffer): void;
+        /**
+         * 发起异步回读（在 executeCMDs 之后调用）
+         */
+        requestBoundsReadback(): void;
+        private updateBoundsFromReadback;
+        private sortableIntToFloat;
+        release(): void;
+    }
+    enum VFXSpawnerLoopState {
+        Finished = 0,
+        DelayBeforeLoop = 1,
+        Looping = 2,
+        DelayAfterLoop = 3
+    }
+    class VFXSpawnerSettings {
+        loopCount: number;
+        loopDuration: number;
+        delayBeforeLoop: number;
+        delayAfterLoop: number;
+    }
+    /**
+     *
+     */
+    class VFXSpawnerState {
+        private _eventAttribute;
+        get eventAttribute(): VFXEventAttribute;
+        setEventAttribute(attr: VFXEventAttribute): void;
+        settings: VFXSpawnerSettings;
+        delayDirty: boolean;
+        loopState: VFXSpawnerLoopState;
+        newLoop: boolean;
+        loopIndex: number;
+        get spawnCount(): number;
+        set spawnCount(value: number);
+        isPlaying(): boolean;
+        /**
+         * 当前状态运行时间
+         */
+        totalTime: number;
+        deltaTime: number;
+        private getCurrentMaximumDuration;
+        private gotoNextLoopState;
+        private fastFowarduntilValidLoopState;
+        private updateLoopCount;
+        private updateDelay;
+        setLoopState(state: VFXSpawnerLoopState): void;
+        constructor();
+        prepareOnPlay(sourceEvtAttr: VFXEventAttribute): void;
+        onPlay(currentSettings: VFXSpawnerSettings): void;
+        beginUpdate(deltaTime: number, currentSettings: VFXSpawnerSettings): void;
+        endUpdate(): void;
+        onStop(): void;
+        release(): void;
+    }
+    class VFXSpawnerSystem extends VFXSystem {
+        desc: VFXSpawnerSystemDesc;
+        spawnerState: VFXSpawnerState;
+        settings: VFXSpawnerSettings;
+        tasks: VFXSpawnerTask[];
+        onPlayInputs: number[];
+        onStopInputs: number[];
+        private eventAttribute;
+        onPlay(sourceEvtAttr: VFXEventAttribute): void;
+        onStop(): void;
+        init(): void;
+        inputSpawner(onPlay: boolean, state: VFXState): void;
+        update(state: VFXState): void;
+        release(): void;
+    }
+    /**
+     * 用户脚本驱动 spawn 的回调签名
+     * @param state 当前 spawnerState（可读 totalTime/loopIndex/loopCount/deltaTime 等）
+     * @param dt    本帧 deltaTime
+     * @returns     本帧要 spawn 的粒子数（>=0；可为分数，runtime 会按 floor + 余量累计）
+     */
+    type IVFXCustomSpawnCallback = (state: VFXSpawnerState, dt: number) => number;
+    abstract class VFXSpawnerTask {
+        abstract init(): void;
+        play(): void;
+        stop(): void;
+        /**
+         * 每当一个新的循环开始时调用
+         */
+        abstract internalInit(rand: Rand): void;
+        abstract internalUpdate(spawnerState: VFXSpawnerState): void;
+        update(spawnerState: VFXSpawnerState, rand: Rand): void;
+        abstract release(): void;
+    }
+    class VFXSpawnerConstantRate extends VFXSpawnerTask {
+        rate: number;
+        init(): void;
+        internalInit(rand: Rand): void;
+        internalUpdate(spawnerState: VFXSpawnerState): void;
+        release(): void;
+    }
+    class VFXSpawnerSingleBurst extends VFXSpawnerTask {
+        count: Vector2;
+        delay: Vector2;
+        countFromLoopIndex: boolean;
+        countModulo: number;
+        private sleeping;
+        private nextTriggerTime;
+        private sampledCount;
+        init(): void;
+        play(): void;
+        internalInit(rand: Rand): void;
+        internalUpdate(spawnerState: VFXSpawnerState): void;
+        release(): void;
+    }
+    class VFXSpawnerOverDistance extends VFXSpawnerTask {
+        distance: number;
+        owner: Sprite3D;
+        private _lastPos;
+        private _hasLast;
+        private _accum;
+        init(): void;
+        internalInit(rand: Rand): void;
+        internalUpdate(spawnerState: VFXSpawnerState): void;
+        release(): void;
+    }
+    class VFXSpawnerCustomWrapper extends VFXSpawnerTask {
+        callbackName: string;
+        effect: VisualEffect;
+        init(): void;
+        internalInit(rand: Rand): void;
+        internalUpdate(spawnerState: VFXSpawnerState): void;
+        release(): void;
+    }
+    class VFXSpawnerSetEventAttribute extends VFXSpawnerTask {
+        attribute: string;
+        value: [
+            number,
+            number,
+            number,
+            number
+        ];
+        fromLoopIndex: boolean;
+        loopIndexModulo: number;
+        fromSpawnStateLoop: boolean;
+        init(): void;
+        internalInit(rand: Rand): void;
+        internalUpdate(spawnerState: VFXSpawnerState): void;
+        release(): void;
+    }
+    class VFXSpawnerPeriodicBurst extends VFXSpawnerTask {
+        count: Vector2;
+        delay: Vector2;
+        private nextTriggerTime;
+        private rand;
+        init(): void;
+        internalInit(rand: Rand): void;
+        internalUpdate(spawnerState: VFXSpawnerState): void;
+        release(): void;
+    }
+    /**
+     * Unity VFXStaticMeshOutput 对齐：渲染单个 mesh，不跑 particle simulation
+     * - 在 owner（VisualEffect 节点）下创建子 Sprite3D + MeshFilter + MeshRenderer
+     * - 子节点 transform 默认 identity（mesh 跟随 owner 世界 transform）
+     * - material 由 .vfx props 提供 UUID，runtime 异步加载；未指定 / 加载失败 fallback unlit material
+     *
+     * 后续可扩展：graph property binding 驱动 material color / transform offset
+     */
+    class VFXStaticMeshSystem extends VFXSystem {
+        desc: VFXStaticMeshSystemDesc;
+        private _child;
+        private _meshFilter;
+        private _meshRenderer;
+        init(): void;
+        private _applyFallbackMaterial;
+        private _tmpVec3;
+        private _tmpColor;
+        update(state: VFXState, cmd: ComputeCommandBuffer): void;
+        private _applyBindings;
+        /** 取出 binding 的实际值（inline 直接返回 / property 运行时从 effect 读） */
+        private _evalSource;
+        release(): void;
+    }
+    abstract class VFXSystem {
+        effect: VisualEffect;
+        abstract init(): void;
+        abstract update(state: VFXState, cmd: ComputeCommandBuffer): void;
+        abstract release(): void;
+    }
+    enum VFXUpdateMode {
+        FixedDeltaTime = 0,
+        DeltaTime = 1,
+        IgnoreTimeScale = 2,
+        ExactFixedTimeStep = 4
+    }
+    class VFXEventDesc {
+        id: number;
+        playSystems: Array<number>;
+        stopSystems: Array<number>;
+        initSystems: Array<number>;
+    }
+    enum VFXSpawnerTaskType {
+        ConstantRate = "ConstantRate",
+        SingleBurst = "SingleBurst",
+        PeriodicBurst = "PeriodicBurst",
+        SpawnOverDistance = "SpawnOverDistance",
+        CustomWrapper = "CustomWrapper",
+        SetEventAttribute = "SetEventAttribute"
+    }
+    interface VFXSpawnerTaskDesc {
+        type: VFXSpawnerTaskType;
+    }
+    class VFXSpawnerConstantRateTaskDesc implements VFXSpawnerTaskDesc {
+        type: VFXSpawnerTaskType;
+        rate: number;
+    }
+    class VFXSpawnerSingleBurstTaskDesc implements VFXSpawnerTaskDesc {
+        type: VFXSpawnerTaskType;
+        delay: Vector2;
+        count: Vector2;
+        countFromLoopIndex: boolean;
+        countModulo: number;
+    }
+    class VFXSpawnerPeriodicBurstTaskDesc implements VFXSpawnerTaskDesc {
+        type: VFXSpawnerTaskType;
+        delay: Vector2;
+        count: Vector2;
+    }
+    class VFXSpawnerOverDistanceTaskDesc implements VFXSpawnerTaskDesc {
+        type: VFXSpawnerTaskType;
+        distance: number;
+    }
+    class VFXSpawnerCustomWrapperTaskDesc implements VFXSpawnerTaskDesc {
+        type: VFXSpawnerTaskType;
+        callbackName: string;
+    }
+    class VFXSpawnerSetEventAttributeTaskDesc implements VFXSpawnerTaskDesc {
+        type: VFXSpawnerTaskType;
+        attribute: string;
+        value: [
+            number,
+            number,
+            number,
+            number
+        ];
+        fromLoopIndex: boolean;
+        loopIndexModulo: number;
+        fromSpawnStateLoop: boolean;
+    }
+    enum VFXGPUEventType {
+        OnDie = "OnDie",
+        Always = "Always",
+        OverTime = "OverTime",
+        OverDistance = "OverDistance"
+    }
+    interface VFXGPUEventInput {
+        sourceSystem: number;
+        eventType: VFXGPUEventType;
+    }
+    /**
+     * Output Event 描述（CPU readback 通知，对齐 Unity VFXOutputEvent）
+     * 每个 outputEvent context 对应 update shader 中一份 OutputEventBuffer_<eventIdx>
+     * Runtime 每帧 readback，按 eventName 派发到 VisualEffect.outputEventReceived 回调
+     */
+    class VFXOutputEventDesc {
+        eventIdx: number;
+        eventName: string;
+        eventType: string;
+        capacity: number;
+        entryFloats: number;
+        entryBytes: number;
+    }
+    enum VFXSimulateSpace {
+        Local = 0,
+        World = 1
+    }
+    enum VFXBoundsMode {
+        Automatic = 0,
+        Manual = 1
+    }
+    enum VFXBlendMode {
+        Alpha = "Alpha",
+        Additive = "Additive",
+        Premultiplied = "Premultiplied",
+        Opaque = "Opaque"
+    }
+    enum VFXSystemType {
+        Spawner = "Spawner",
+        Particle = "Particle",
+        StaticMesh = "StaticMesh"
+    }
+    interface VFXSystemDesc {
+        type: VFXSystemType;
+    }
+    /**
+     * VFXStaticMeshSystem 描述：渲染单个 mesh，不跑 particle simulation
+     * Unity VFXStaticMeshOutput 对齐 — mesh 跟随 owner transform，material 由用户提供
+     * bindings: setStaticMeshAttr block 收集到的 graph driven 绑定
+     *   target: "position" | "rotation" | "scale" | "color"
+     *   source: "inline" → value 是静态值 / "property" → name 引用 effect graph property
+     */
+    interface VFXStaticMeshBinding {
+        target: "position" | "rotation" | "scale" | "color";
+        source: "inline" | "property";
+        value?: any;
+        name?: string;
+    }
+    class VFXStaticMeshSystemDesc implements VFXSystemDesc {
+        type: VFXSystemType;
+        mesh: Mesh;
+        materialUuid: string;
+        bindings: VFXStaticMeshBinding[];
+    }
+    class VFXSpawnerSystemDesc implements VFXSystemDesc {
+        type: VFXSystemType;
+        loopCount: Vector2;
+        loopDuration: Vector2;
+        delayBeforeLoop: number;
+        delayAfterLoop: number;
+        tasks: Array<VFXSpawnerTaskDesc>;
+        onPlayInputs: number[];
+        onStopInputs: number[];
+    }
+    class VFXParticleSystemDesc implements VFXSystemDesc {
+        type: VFXSystemType;
+        capacity: number;
+        attributeBytesPerParticle: number;
+        initializeShader: ComputeShader;
+        updateShader: ComputeShader;
+        outputShader: ComputeShader;
+        prepareDispatchShader: ComputeShader;
+        updateStripsShader: ComputeShader;
+        outputType: string;
+        spawnerSystems: number[];
+        receiveGPUEvent: boolean;
+        gpuEventInput: VFXGPUEventInput | null;
+        mesh: Mesh;
+        simulateSpace: VFXSimulateSpace;
+        boundsMode: VFXBoundsMode;
+        boundsCenter: Vector3;
+        boundsExtents: Vector3;
+        particlePerStripCount: number;
+        stripCapacity: number;
+        blendMode: VFXBlendMode;
+        softParticleFade: number;
+        uvMode: string;
+        flipbookSize: Vector2;
+        mainTexture: string;
+        subpixelAA: boolean;
+        customShaderName: string;
+        billboardPrimitive: string;
+        billboardVertexCount: number;
+        billboardCropFactor: number;
+        useAlphaClipping: boolean;
+        alphaThreshold: number;
+        stripColorMapping: string;
+        stripUvScale: {
+            x: number;
+            y: number;
+        };
+        stripUvBias: {
+            x: number;
+            y: number;
+        };
+        stripGradientStops: {
+            t: number;
+            color: [
+                number,
+                number,
+                number,
+                number
+            ];
+        }[];
+        distortionMode: string;
+        extraOutputs: VFXExtraOutputDesc[];
+        textureUniforms: Array<{
+            uniformName: string;
+            texture: BaseTexture;
+            textureType: string;
+        }>;
+        bufferUniforms: Array<{
+            uniformName: string;
+            propertyName: string;
+        }>;
+        outputEvents: Array<VFXOutputEventDesc>;
+    }
+    /** Multi-Output 额外输出描述（共享粒子数据，独立渲染参数） */
+    class VFXExtraOutputDesc {
+        outputType: string;
+        outputShader: ComputeShader;
+        blendMode: VFXBlendMode;
+        softParticleFade: number;
+        uvMode: string;
+        flipbookSize: Vector2;
+        mainTexture: string;
+        subpixelAA: boolean;
+        customShaderName: string;
+        mesh: Mesh;
+        stripCapacity: number;
+        particlePerStripCount: number;
+        textureUniforms: Array<{
+            uniformName: string;
+            texture: BaseTexture;
+            textureType: string;
+        }>;
+        billboardPrimitive: string;
+        billboardVertexCount: number;
+        billboardCropFactor: number;
+        useAlphaClipping: boolean;
+        alphaThreshold: number;
+        tilingMode: string;
+        colorMapping: string;
+        uvScale?: {
+            x: number;
+            y: number;
+        };
+        uvBias?: {
+            x: number;
+            y: number;
+        };
+    }
+    enum VFXPropertyType {
+        Float = "float",
+        Vec2 = "vec2",
+        Vec3 = "vec3",
+        Vec4 = "vec4",
+        Color = "color",
+        Gradient = "gradient",
+        Texture2D = "texture2D",
+        Curve = "curve"
+    }
+    interface VFXGradientStop {
+        t: number;
+        color: [
+            number,
+            number,
+            number,
+            number
+        ];
+    }
+    class VFXPropertyDesc {
+        name: string;
+        uniform: string;
+        type: VFXPropertyType;
+        default: number[] | string[];
+        gradientStops?: VFXGradientStop[];
+        /** Texture2D 类型异步加载后存放的纹理实例 */
+        texture?: any;
+        /** 分组名，用于 Inspector 把同组属性折叠在一起展示；空/未设视为 "Default" 组 */
+        group?: string;
+        /** Inspector 显示的友好名称；未设回退到 name */
+        displayName?: string;
+    }
+    class VFXCurveUniformDesc {
+        opId: number;
+        uniform: string;
+        curveData: number[];
+    }
+    class VFXAsset extends Resource {
+        updateMode: VFXUpdateMode;
+        initialEventName: string;
+        prewarmStepCount: number;
+        prewarmDeltaTime: number;
+        /** PreWarm 总时间（秒）；>0 时 play 初次触发会用 prewarmDeltaTime 步长循环 stepCount 次模拟 */
+        preWarmTotalTime: number;
+        eventAttributeDesc: VFXEventAttributeDesc;
+        properties: Array<VFXPropertyDesc>;
+        systems: Array<VFXSystemDesc>;
+        curveUniforms: Array<VFXCurveUniformDesc>;
+        bakedTexture: BaseTexture;
+        constructor();
+        getEvents(): ReadonlyMap<number, VFXEventDesc>;
+        /**
+         * 扫描 systems，将所有 Resource 类型依赖注册到 addDep
+         * 在 parser 异步加载完成后调用
+         */
+        resolveDeps(): void;
+        protected _disposeResource(): void;
+    }
+    class VFXAssetParser {
+        parse(data: any): Promise<VFXAsset>;
+    }
+    /**
+     * SkinnedMesh 顶点静态属性烘焙到 RGBA32F 1×N 纹理
+     * @param role  "position" | "indices" | "weights" | "normal"
+     *  - position/normal: vec3 → RGBA (.w 给 1)
+     *  - indices: vec4 (4 骨骼索引)
+     *  - weights: vec4 (4 骨骼权重)
+     */
+    function bakeSkinnedMeshVertexTexture(mesh: Mesh, role: "position" | "indices" | "weights" | "normal"): Texture2D;
+    /**
+     * 烘焙/更新 bones 矩阵到 256×1 RGBA32F 纹理（64 mat4 × 4 vec4）
+     * 每帧调用 — skinningMatrix[i] = bones[i].worldMatrix * mesh._inverseBindPoses[i]
+     * @param existingTex 复用现有纹理（避免每帧分配）；首次传 null 创建新纹理
+     */
+    function bakeSkinnedMeshBonesTexture(renderer: any, existingTex: Texture2D | null): Texture2D;
+    /**
+     * VFXBillboardGeometry — 对齐 Unity VFXPlanarPrimitiveOutput
+     *
+     * Procedural billboard 渲染：不依赖 mesh 资源，vertex shader 根据 gl_VertexID
+     * 生成 Quad(6)/Triangle(3)/Octagon(18) 的顶点。配合 per-particle instance buffer。
+     *
+     * 每粒子 1 instance，每 instance 生成 vertexCount 个顶点。
+     * 使用 DrawArrayIndirect：[vertexCount, instanceCount, firstVertex, firstInstance]
+     *  - vertexCount: 编译时固定（Quad=6 / Triangle=3 / Octagon=18）
+     *  - instanceCount: output compute shader 原子累加（offset 4）
+     */
+    class VFXBillboardGeometryParams {
+        capacity: number;
+        /** 每 instance 的顶点数（Quad=6, Triangle=3, Octagon=18）*/
+        vertexCount: number;
+        particleBuffer: VertexBuffer3D;
+        particleDeviceBuffer: DeviceBuffer;
+        indirectBuffer: DeviceBuffer;
+    }
+    class VFXBillboardGeometry extends GeometryElement {
+        static ParticleDecl: VertexDeclaration;
+        static init(): void;
+        readonly capacity: number;
+        indirectBuffer: DeviceBuffer;
+        bounds: Bounds;
+        blendMode: string;
+        outputType: string;
+        softParticleFade: number;
+        uvMode: string;
+        flipbookSize: Vector2;
+        /** Atlas 模式专属：res:// uuid，VFXRenderer 加载后设到 BillboardMaterial.u_AlbedoTexture */
+        mainTexture: string;
+        subpixelAA: boolean;
+        customShaderName: string;
+        /** Primitive 类型：Quad / Triangle / Octagon */
+        primitive: string;
+        /** Octagon 裁角因子 [0, 0.5]，0=方形 / 0.146=正八边形 / 0.5=圆形 */
+        cropFactor: number;
+        constructor(params: VFXBillboardGeometryParams);
+        _updateRenderParams(state: RenderContext3D): void;
+        destroy(): void;
+    }
+    enum VFXEventAttributeType {
+        Bool = 0,
+        Int = 1,
+        Uint = 2,
+        Float = 3,
+        Vector2 = 4,
+        Vector3 = 5,
+        Vector4 = 6
+    }
+    /**
+     * Event Attribute 布局描述
+     * 每个 VFXAsset 持有一个固定的布局，用于描述 EventAttribute 的内存结构
+     * 构造时一次性传入所有属性定义，之后布局不可变
+     * 运行时用 createBuffer 创建 ArrayBuffer，通过 offset 解释其中的值
+     */
+    class VFXEventAttributeDesc {
+        private _entries;
+        /** 单个 EventAttribute 的总字节数 */
+        private _stride;
+        /** 事件数据起始偏移（header 后，对齐到 maxAlign） */
+        private _eventDataOffset;
+        /** 事件数据 stride（std430 struct array stride，对齐到 maxAlign） */
+        private _eventDataStride;
+        get stride(): number;
+        get eventDataOffset(): number;
+        get eventDataStride(): number;
+        get attributeCount(): number;
+        /** 默认布局：第一个位置固定为 spawnCount (Float)，其后为事件数据属性 */
+        static readonly defaultAttributes: ReadonlyArray<{
+            name: string;
+            type: VFXEventAttributeType;
+        }>;
+        /**
+         * 使用 std430 对齐规则计算布局，使事件数据区域与 GPU SourceEventData 字节对齐
+         * @param attributes 额外的属性定义列表，会追加在默认布局之后。为 null 时仅使用默认布局
+         */
+        constructor(attributes?: Array<{
+            name: string;
+            type: VFXEventAttributeType;
+        }>);
+        /**
+         * 获取属性的字节偏移
+         * @returns 偏移量，不存在返回 -1
+         */
+        getAttributeOffset(name: string): number;
+        /**
+         * 获取属性类型
+         */
+        getAttributeType(name: string): VFXEventAttributeType | undefined;
+        /**
+         * 获取属性字节大小
+         */
+        getAttributeSize(name: string): number;
+        /**
+         * 检查属性是否存在
+         */
+        hasAttribute(name: string): boolean;
+        /**
+         * 创建基于此布局的 ArrayBuffer
+         */
+        createBuffer(): ArrayBuffer;
+    }
+    /**
+     * Event Attribute 数据实例
+     * 持有 VFXEventAttributeDesc 的引用和对应的 ArrayBuffer
+     * 通过 desc 的布局信息解释 buffer 中的值
+     */
+    class VFXEventAttribute {
+        private _desc;
+        private _buffer;
+        private _view;
+        get view(): DataView;
+        constructor(desc: VFXEventAttributeDesc);
+        get desc(): VFXEventAttributeDesc;
+        get buffer(): ArrayBuffer;
+        /**
+         * 初始化 buffer，可指定 byteOffset 使用 ArrayBuffer 的一段
+         * DataView 的读写偏移相对于 byteOffset，现有 get/set 方法无需改动
+         */
+        initBuffer(buffer: ArrayBuffer, byteOffset?: number, byteLength?: number): void;
+        setBool(name: string, value: boolean): void;
+        getBool(name: string): boolean;
+        setInt(name: string, value: number): void;
+        getInt(name: string): number;
+        setUint(name: string, value: number): void;
+        getUint(name: string): number;
+        setFloat(name: string, value: number): void;
+        getFloat(name: string): number;
+        setVector2(name: string, x: number, y: number): void;
+        getVector2(name: string, out: Vector2): Vector2;
+        setVector3(name: string, x: number, y: number, z: number): void;
+        getVector3(name: string, out: Vector3): Vector3;
+        setVector4(name: string, x: number, y: number, z: number, w: number): void;
+        getVector4(name: string, out: Vector4): Vector4;
+        /**
+         * 将所有值归零
+         */
+        clear(): void;
+        /**
+         * 从另一个同布局的 VFXEventAttribute 拷贝数据
+         */
+        copyFrom(other: VFXEventAttribute): void;
+        destroy(): void;
+    }
+    class VFXFrameTime {
+        fixedDeltaTime: number;
+        deltaTime: number;
+        timeStepCount: number;
+        unscaledDeltaTime: number;
+        unscaledFixedDeltaTime: number;
+        unscaledTimeStepCount: number;
+        timeAccum: number;
+        unscaledTimeAccum: number;
+        constructor();
+        computeStepCount(fixedTimeStep: number, maxFixedStepCount: number, currentDeltaTime: number, maxDeltaTime: number): void;
+        computeUnscaledStepCount(fixedTimeStep: number, maxFixedStepCount: number, currentUnscaledDeltaTime: number, maxDeltaTime: number): void;
+    }
+    class VFXGeometryParams {
+        mesh: Mesh;
+        capacity: number;
+        particleBuffer: VertexBuffer3D;
+        particleDeviceBuffer: DeviceBuffer;
+        indirectBuffer: DeviceBuffer;
+    }
+    function findGpuVertexBuffer(...sources: any[]): any;
+    class VFXGeometry extends GeometryElement {
+        static ParticleDecl: VertexDeclaration;
+        static init(): void;
+        readonly capacity: number;
+        indirectBuffer: DeviceBuffer;
+        private _mesh;
+        get mesh(): Mesh;
+        bounds: Bounds;
+        blendMode: string;
+        outputType: string;
+        softParticleFade: number;
+        uvMode: string;
+        flipbookSize: Vector2;
+        subpixelAA: boolean;
+        customShaderName: string;
+        constructor(params: VFXGeometryParams);
+        _updateRenderParams(state: RenderContext3D): void;
+        destroy(): void;
+    }
+    /**
+     * VFXLineGeometry — Output Line 渲染几何
+     *
+     * 每个粒子 2 vertices（line segment），每 vertex 4 vec4 (64 bytes)：
+     *   [0] xyz=position, w=1
+     *   [1] rgba=color
+     *   [2] xy=uv, zw=0
+     *   [3] xyz=normal, w=0
+     *
+     * 使用 MeshTopology.Lines + DrawArrayIndirect
+     */
+    class VFXLineGeometryParams {
+        capacity: number;
+        renderBuffer: DeviceBuffer;
+        indirectBuffer: DeviceBuffer;
+    }
+    class VFXLineGeometry extends GeometryElement {
+        static LineVertexDecl: VertexDeclaration;
+        static init(): void;
+        readonly capacity: number;
+        indirectBuffer: DeviceBuffer;
+        blendMode: string;
+        outputType: string;
+        softParticleFade: number;
+        bounds: Bounds;
+        constructor(params: VFXLineGeometryParams);
+        _updateRenderParams(state: RenderContext3D): void;
+        destroy(): void;
+    }
+    /**
+     * VFXLineStripGeometry — Output LineStrip 渲染几何
+     * 对齐 Unity VFXLineStripOutput
+     *
+     * 每粒子 1 vertex（同 VFXPointGeometry layout，48 bytes）：
+     *   [0] xyz=position, w=size (size 不使用，但保持 layout 兼容)
+     *   [1] rgba=color
+     *   [2] xy=uv, zw=0
+     *
+     * 使用 MeshTopology.LineStrip + DrawArrayIndirect
+     * 顶点按粒子顺序连接成连续线段（适合 beam / 闪电 / 激光 / 轨迹线）。
+     *
+     * 复用 OutputPoint compute shader 输出（每粒子 1 vertex），
+     * 复用 VFXStrip material（vertex layout 兼容）。
+     */
+    class VFXLineStripGeometryParams {
+        capacity: number;
+        renderBuffer: DeviceBuffer;
+        indirectBuffer: DeviceBuffer;
+    }
+    class VFXLineStripGeometry extends GeometryElement {
+        static LineStripVertexDecl: VertexDeclaration;
+        static init(): void;
+        readonly capacity: number;
+        indirectBuffer: DeviceBuffer;
+        blendMode: string;
+        outputType: string;
+        softParticleFade: number;
+        bounds: Bounds;
+        constructor(params: VFXLineStripGeometryParams);
+        _updateRenderParams(state: RenderContext3D): void;
+        destroy(): void;
+    }
+    class VFXLoader implements IResourceLoader {
+        load(task: ILoadTask): Promise<VFXAsset>;
+    }
+    /**
+     * VFXPointGeometry — Output Point 渲染几何
+     *
+     * 每个粒子 1 vertex，3 vec4 (48 bytes)：
+     *   [0] xyz=position, w=pointSize
+     *   [1] rgba=color
+     *   [2] xy=uv, zw=0
+     *
+     * 使用 MeshTopology.Points + DrawArrayIndirect
+     */
+    class VFXPointGeometryParams {
+        capacity: number;
+        renderBuffer: DeviceBuffer;
+        indirectBuffer: DeviceBuffer;
+    }
+    class VFXPointGeometry extends GeometryElement {
+        static PointVertexDecl: VertexDeclaration;
+        static init(): void;
+        readonly capacity: number;
+        indirectBuffer: DeviceBuffer;
+        blendMode: string;
+        outputType: string;
+        softParticleFade: number;
+        bounds: Bounds;
+        constructor(params: VFXPointGeometryParams);
+        _updateRenderParams(state: RenderContext3D): void;
+        destroy(): void;
+    }
+    class VFXRenderer extends BaseRender {
+        private static _stripMaterialCache;
+        private static _billboardMaterialCache;
+        private static _customShaderMaterialCache;
+        private static _defaultDotTexture;
+        /**
+         * 程序生成 DefaultDot 软圆纹理（对齐 Unity VFX Graph DefaultParticle.png）
+         * 64×64 白色软圆，alpha 为距中心的平滑衰减
+         */
+        static getDefaultDotTexture(): Texture2D;
+        /**
+         * 按 blendMode 获取/创建 Billboard 默认材质（带 DefaultDot 纹理）
+         * 用户未配置 sharedMaterials[0] 时使用
+         */
+        static getBillboardMaterial(blendMode?: string): Material;
+        /**
+         * Billboard procedural material 缓存（key = primitive|blendMode）
+         * 每个 primitive × blendMode 组合独立一份 material（因为 shader define 不同）
+         */
+        private static _billboardProceduralCache;
+        /** mesh 已经跑过 vertex color smooth 的标记 (key = mesh._id), 避免重复跑 */
+        private static _smoothedMeshIds;
+        private static _smoothedNormalMeshIds;
+        /**
+         * 给 mesh 跑 smooth normal: Unity .fbx import 默认 split vertex by hard edge + smooth normal
+         * 平均化, 让相邻 face 共享 normal → shading 平滑无 alternating. Laya .fbx import 没这步,
+         * 让蓝图 PBR shader 算 SurfaceShading 时邻接 face normal 不一致 → fragment shading 跳变 →
+         * 三角形 alternating striping (image 56 蜡池区现象). 这里 weld by position + 平均 normal 复用
+         * vc smooth 的 cluster 基础设施.
+         */
+        static smoothMeshNormals(mesh: Mesh): void;
+        /**
+         * 给 mesh 跑 Laplacian vertex color smooth: 蓝图 ShaderGraph 用 mesh 顶点色驱动多区域选色
+         * (e.g. SG_Candle 用 vc.g 分饰圈/蜡池/dripping), per-vertex 颜色直接 dump 显示三角形渐变.
+         * Unity 端因为有 bloom + AA + tonemap 视觉融合, Laya 简单 lighting 直接暴露相邻三角形色差.
+         * 这里对相邻 vertex (共三角形) 颜色做加权平均, 减少 striping 同时保留大尺度 region 差异.
+         * 只 smooth r/g/a 通道 (b 通道在 vertex shader vfxTransformVertex 阶段 override 给 per-particle).
+         */
+        static smoothMeshVertexColors(mesh: Mesh, iterations?: number, factor?: number): void;
+        /** 共享 atlas texture 本地 cache（res:// uuid → BaseTexture），避免 Laya.loader 异步竞争 */
+        private static _atlasTextureCache;
+        private static _failedTextureUrls;
+        private static _tryLoadTextureOnce;
+        /** mark mesh / texture 已 patch 避免重复跑 */
+        private static _patchedTextureUrls;
+        private static _patchTextureAlphaFromLuminance;
+        /**
+         * 对齐 Unity VFXPlanarPrimitiveOutput：procedural billboard（用 gl_VertexID 生成顶点）
+         * primitive: "Quad" / "Triangle" / "Octagon"
+         * cropFactor: Octagon 专用裁角因子 [0, 0.5]
+         * mainTextureUuid / uvMode / fbW / fbH 加入 cache key —— Multi-Output 同一 system 多 output ctx
+         *   各自配 atlas + flipbook 时需要独立 material 实例，否则 cache 共享让最后一个 ctx 设置盖掉前面
+         */
+        private static _geoUidNext;
+        static getBillboardProceduralMaterial(primitive: string, blendMode?: string, cropFactor?: number, mainTextureUuid?: string, uvMode?: string, fbW?: number, fbH?: number, geoUid?: number): Material | null;
+        /** Distortion procedural material 缓存（Unity VFXDistortion 对齐） */
+        private static _distortionMaterialCache;
+        /**
+         * 对齐 Unity VFXDistortion：采样 u_CameraOpaqueTexture 做 UV 偏移
+         * mode: "Procedural"（径向透镜）/ "NormalMap"（用 u_AlbedoTexture 的 RG 当法线）
+         * distortionStrength: UV 偏移乘法因子 [0, 1]
+         * Camera 必须启用 opaqueTexture 才能看到效果
+         */
+        static getDistortionMaterial(mode: string, blendMode: string, distortionStrength: number): Material | null;
+        /** Cube procedural material 缓存（Unity VFXBasicCubeOutput 对齐） */
+        private static _cubeProceduralCache;
+        /**
+         * 对齐 Unity VFXBasicCubeOutput：3D cube 粒子（6 面，带简易 Lambert 光照）
+         */
+        static getCubeProceduralMaterial(blendMode?: string): Material | null;
+        private static _pendingCustomShaderLoads;
+        /**
+         * 按 shaderName + blendMode 获取/创建自定义 shader 材质
+         * 用于 outputShaderGraphQuad / outputShaderGraphMesh 等用户指定 shader 的 output context
+         *
+         * Shader 未注册时（例如 .bps 还没被 loader 加载）通过 AssetDb shaderNameMap
+         * 反查到 res:// url 异步加载（每次只 kick off 一次），返回 VFXUnlit fallback；
+         * .bps 加载完成后下一次 getCustomShaderMaterial 调用会命中已注册 shader。
+         */
+        static getCustomShaderMaterial(shaderName: string, blendMode?: string): Material;
+        /**
+         * 按 blendMode 获取/创建 strip 材质（缓存共享）
+         * blendMode: "Alpha" | "Additive" | "Premultiplied" | "Opaque"
+         *
+         * 使用 VFXUnlit shader（支持 a_AttrPosition 等 VFX 实例属性），
+         * 不能用 UnlitMaterial（engine 的标准 Unlit shader 不认识 VFX 属性）
+         */
+        static getStripMaterial(blendMode?: string, mainTextureUuid?: string, colorMapping?: string, uvScale?: {
+            x: number;
+            y: number;
+        }, uvBias?: {
+            x: number;
+            y: number;
+        }, gradientStops?: {
+            t: number;
+            color: [
+                number,
+                number,
+                number,
+                number
+            ];
+        }[], tilingMode?: string, tilingSegments?: number): Material;
+        private _geometries;
+        addGeometry(geometry: GeometryElement): void;
+        removeGeometry(geometry: GeometryElement): void;
+        clearGeometries(): void;
+        constructor();
+        /**
+         * VFXRenderer 用动态生成的 customShaderMaterial (不在 sharedMaterials),
+         * BaseRender._isSupportRenderFeature 扫不到 _supportReflectionProbe flag,
+         * 让 PBR 蓝图 shader 拿不到 reflection probe IBL uniform → 高 metallic mesh 全黑或毛糙不融合.
+         * 这里手动 force enable + 强制 set probReflection = sceneReflectionProb 让 BaseRender setter 把
+         * reflection probe shaderData 注册到 _baseRenderNode.additionShaderData["ReflectionProbe"],
+         * 这样 render element dispatch 时引擎自动 bind 这个 global block 给 shader,
+         * 蓝图 PBR shader 才能拿到 u_AmbientColor / u_IBLTex / u_IblSH 真值.
+         */
+        protected _onEnable(): void;
+        protected _createBaseRenderNode(): IBaseRenderNode;
+        protected _getcommonUniformMap(): Array<string>;
+        private _createRenderElement;
+        private _rebuildRenderElements;
+        protected _onWorldMatNeedChange(flag: number): void;
+        _renderUpdate(context3D: IRenderContext3D): void;
+        renderUpdate(context: RenderContext3D): void;
+    }
+    class VFXState {
+        /**
+         * 当前帧的 delta time (应用 playRate 后)
+         */
+        deltaTime: number;
+        /**
+         * 当前帧的 unscaled delta time (未应用 playRate)
+         */
+        unscaledDeltaTime: number;
+        totalTime: number;
+        playRate: number;
+        systemSeed: number;
+        rand: Rand;
+        emitterWorldMatrix: Matrix4x4;
+        invEmitterWorldMatrix: Matrix4x4;
+    }
+    /**
+     * VFXStripGeometry — Strip/Trail 渲染几何体
+     *
+     * GPU 端 Output Strip CS 生成顶点数据到 DeviceBuffer (RenderBuffer)，
+     * 这里负责管理 VB/IB/BufferState 和 IndirectDraw 设置。
+     *
+     * 顶点布局（per vertex, stride=64 bytes）：
+     *   attr 0: vec4 position (xyz + w=1)
+     *   attr 1: vec4 color (rgba)
+     *   attr 2: vec2 uv (xy)
+     *   attr 3: vec3 normal (xyz)
+     */
+    class VFXStripGeometryParams {
+        capacity: number;
+        stripVertexBuffer: DeviceBuffer;
+        indirectBuffer: DeviceBuffer;
+        stripCapacity?: number;
+        particlePerStripCount?: number;
+    }
+    class VFXStripGeometry extends GeometryElement {
+        static StripVertexDecl: VertexDeclaration;
+        static init(): void;
+        readonly capacity: number;
+        indirectBuffer: DeviceBuffer;
+        blendMode: string;
+        bounds: Bounds;
+        constructor(params: VFXStripGeometryParams);
+        _updateRenderParams(state: RenderContext3D): void;
+        destroy(): void;
+    }
+    /**
+     * 从 [min, max] 范围采样，min === max 时直接返回常量，不消耗 rand 状态
+     */
+    function sampleRange(range: Vector2, rand: Rand): number;
+    class VisualEffect extends Script {
+        owner: Sprite3D;
+        private _asset;
+        get asset(): VFXAsset;
+        set asset(value: VFXAsset);
+        randomSeed: number;
+        /**
+         * @en Property override values from Inspector. Stored as JSON string (LayaPro 序列化层不识别 plain object dynamic key map，必须 string 序列化).
+         *     Decoded shape: { [name: string]: number[] } per type Float [v] / Vec2 [x,y] / Vec3 [x,y,z] / Vec4 / Color [x,y,z,w].
+         *     Gradient override not supported in MVP. Applied after initAssetData when _propertyValues is ready.
+         * @zh Inspector 设置的 property override 值，存为 JSON string（LayaPro 序列化层 type=object 不识别会 fallback null，必须用 string 类型字段）。
+         *     解码后 shape：{ name: number[] }，对应 Float/Vec2/Vec3/Vec4/Color 类型。
+         *     Gradient override 暂不支持。在 initAssetData 完成后由 _applyPropertyOverrides 解码应用。
+         */
+        propertyOverrides: string;
+        private currentSeed;
+        private rand;
+        resetSeedOnPlay: boolean;
+        private initialEventID;
+        private _initialEvent;
+        get initialEvent(): string;
+        set initialEvent(value: string);
+        private eventQueue;
+        private globalEventAttribute;
+        private frameTime;
+        private cmd;
+        playRate: number;
+        private _mainCamera;
+        /**
+         * 主相机，用于模拟阶段的相机相关计算
+         * 默认自动获取场景主相机，也可手动指定
+         */
+        get mainCamera(): Camera;
+        set mainCamera(value: Camera);
+        state: VFXState;
+        /**
+         * Output Event 回调（对齐 Unity VFXOutputEventArgs）
+         *
+         * 当 triggerEvent block 路由到 outputEvent context 且触发条件满足时，
+         * 每一条触发都会异步回调一次（typically 1-2 帧延迟 due to GPU readback）。
+         *
+         * args 字段：
+         *   eventName   — outputEvent context 的 eventName prop
+         *   particleId  — 源粒子 id（uint）
+         *   position    — vec3 世界/本地坐标（按 simulateSpace）
+         *   velocity    — vec3
+         *   age/lifetime — float
+         *   color       — vec4 rgba
+         *   size        — float
+         *
+         * 用法：
+         *   vfx.outputEventReceived = (args) => {
+         *       if (args.eventName === "OnDie") spawnExplosion(args.position);
+         *   };
+         */
+        outputEventReceived: ((args: {
+            eventName: string;
+            particleId: number;
+            position: number[];
+            velocity: number[];
+            age: number;
+            lifetime: number;
+            color: number[];
+            size: number;
+        }) => void) | null;
+        private _customSpawnCallbacks;
+        private _skinnedMeshSources;
+        private _skinnedMeshBoneTextures;
+        private _skinnedMeshVertexBaked;
+        /**
+         * 注册 SkinnedMesh source — sampleSkinnedMeshXxx operator 通过 sourceName 引用
+         * @param name      与 .vfx 中 sampleSkinnedMeshXxx operator 的 Source Name 一致
+         * @param renderer  场景里现有的 SkinnedMeshRenderer 组件
+         */
+        setSkinnedMeshSource(name: string, renderer: any): void;
+        /** 移除 SkinnedMesh source 注册 */
+        clearSkinnedMeshSource(name: string): void;
+        /**
+         * 注册 customSpawn block 的 spawn 数量回调。
+         * @param name      与 .vfx 中 customSpawn block 的 Callback Name 一致
+         * @param callback  签名 (state, dt) => spawnCount，返回本帧要 spawn 的粒子数（>=0；可为分数）
+         */
+        setCustomSpawnCallback(name: string, callback: IVFXCustomSpawnCallback): void;
+        /** 移除指定 name 的 customSpawn 回调 */
+        clearCustomSpawnCallback(name: string): void;
+        /** runtime 内部调用，根据 name 取回调 */
+        getCustomSpawnCallback(name: string): IVFXCustomSpawnCallback | undefined;
+        private _invEmitterWorldMatrix;
+        private _propertyValues;
+        private createAssetData;
+        private initAssetData;
+        private releaseAssetData;
+        constructor();
+        onStart(): void;
+        private _stripNode;
+        private _stripRenderer;
+        onAwake(): void;
+        onEnable(): void;
+        onUpdate(): void;
+        onDestroy(): void;
+        sendEvent(id: number, attribute?: VFXEventAttribute): void;
+        sendEventByName(name: string, attribute?: VFXEventAttribute): void;
+        processEvent(evt: VFXEvent, state: VFXState): void;
+        processInitialize(evt: VFXEvent, state: VFXState): void;
+        execudeEvents(state: VFXState): void;
+        updateVFX(): void;
+        /**
+         * 每帧执行：evaluate shader property expression chains，写到 material shaderData
+         * VFX operator chain（SampleGradient/SampleCurve/Math 等）连到 shader uniform 的真正实施
+         * 参 ShaderExpressionEvaluator
+         */
+        private _tmpExprVec4;
+        /**
+         * 每帧 evaluate VFX OutputContext 的 shader uniform expression chains（如 SampleGradient(time)）
+         * → setVector/setNumber 到 cache material 的 shaderData
+         * 转换器把 operator chain 序列化到 sys.shaderPropertyExpressions
+         * 参 ShaderExpressionEvaluator
+         */
+        private _evaluateShaderExpressions;
+        /**
+         * 模拟阶段：事件处理 + Spawner 更新 + 粒子 Update/Initialize
+         * 每帧调用一次
+         */
+        simulateVFX(): void;
+        /**
+         * 输出阶段：生成 RenderBuffer + IndirectBuffer + BoundsBuffer
+         * 可逐相机调用，为后续传入相机数据做准备
+         */
+        outputVFX(context3D: IRenderContext3D): void;
+        /** Output Event 派发入口 — 由各系统 readback 完成后调用 */
+        private _dispatchOutputEvent;
+        play(): void;
+        /**
+         * PreWarm 接入：按 asset.prewarmStepCount 循环执行 simulateVFX，每步 dt = prewarmDeltaTime
+         * 典型用法：瀑布/烟雾/下雪 vfx 启动就已是稳态，不用等 N 秒填充
+         */
+        private _executePreWarm;
+        stop(): void;
+        private _pause;
+        get pause(): boolean;
+        set pause(value: boolean);
+        /**
+         * 单步前进一帧
+         */
+        advanceOneFrame(): void;
+        private createEmptyEventAttribute;
+        createEventAttribute(): VFXEventAttribute;
+        reset(): void;
+        /**
+         * 设置 property 值（按 property name）
+         */
+        setPropertyFloat(name: string, value: number): void;
+        setPropertyVec2(name: string, x: number, y: number): void;
+        setPropertyVec3(name: string, x: number, y: number, z: number): void;
+        setPropertyVec4(name: string, x: number, y: number, z: number, w: number): void;
+        /**
+         * 绑定外部 DeviceBuffer 到 VFX 系统（供 sampleGraphicsBuffer operator 使用）
+         * @param name bufferUniforms 中的 propertyName
+         * @param buffer 要绑定的 DeviceBuffer
+         */
+        setBuffer(name: string, buffer: DeviceBuffer): void;
+        /**
+         * 将 curveUniforms（vec4 采样参数）和 bakedTexture 写入所有粒子系统的 shaderData
+         * 只需在资源初始化时调用一次
+         */
+        private applyCurveUniforms;
+        /**
+         * 每帧扫描所有 system 的 textureUniforms，处理 SkinnedMesh entry：
+         * - 首次：从 source.sharedMesh 烘焙静态 vertex 属性（pos/idx/weight/normal）
+         * - 每帧：刷新 bones 矩阵 texture（动画驱动）
+         */
+        private _updateSkinnedMeshTextures;
+        private applyProperties;
+    }
+    const VFXInit: () => void;
     /**
      * @en BlendMode enumeration.
      * @zh 混合模式枚举。
@@ -89135,6 +93778,12 @@ declare namespace Laya {
          * @readonly
          */
         static isConch: boolean;
+        /**
+         * @en Whether the engine is running on the modernAPIs rendering backend (wgpu-based).
+         * @zh 引擎是否正在使用 现代图形API 渲染后端（基于 wgpu）。
+         * @readonly
+         */
+        static isModernAPIs: boolean;
         /**
          * @en Whether the engine is running in the editor. The engine may have two states in the editor, one is running in the scene view of the editor, and the other is running in the game view of the editor. Please distinguish these two states through isPlaying.
          * @zh 引擎是否正在运行在编辑器下。引擎在编辑器下可能有两种状态，一种是运行在编辑器的场景视图，一种是运行在编辑器的游戏视图，请通过isPlaying区别这两种情况。

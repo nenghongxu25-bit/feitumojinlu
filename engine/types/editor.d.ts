@@ -466,17 +466,12 @@ declare global {
             fileExists(filePath: string): Promise<boolean>;
 
             /**
-             * Check if a filename conflicts in the specified folder. If there is a conflict, add a numeric suffix to the filename and continue checking until there is no conflict.
-             * @param path The folder path. 
-             * @param name The filename.
-             * @returns The new filename. 
+             * @deprecated Use `resolveConflictFileName` instead.
              */
             getNewFilePath(path: string, name: string): string;
 
             /**
              * Check if a filename conflicts in the specified folder. If there is a conflict, add a numeric suffix to the filename and continue checking until there is no conflict.
-             * 
-             * The difference with `getNewFilePath` is that it allows specifying a delimiter to connect the filename and the numeric suffix.
              * @param path The folder path.
              * @param name The filename. 
              * @param connectorSymbol The delimiter to connect the filename and the numeric suffix. The default is "_".
@@ -485,15 +480,7 @@ declare global {
             resolveConflictFileName(path: string, name: string, connectorSymbol?: string): Promise<string>;
 
             /**
-             * Check if a filename conflicts in the specified folder. If there is a conflict, add a numeric suffix to the filename and continue checking until there is no conflict.
-             * 
-             * The difference with `getNewFilePath` is that it allows specifying a delimiter to connect the filename and the numeric suffix.
-             * 
-             * This is the synchronous version of `resolveConflictFileName`.
-             * @param path The folder path. 
-             * @param name The filename. 
-             * @param connectorSymbol The delimiter to connect the filename and the numeric suffix. The default is "_".
-             * @returns The new filename. 
+             * @deprecated Use `resolveConflictFileName` instead. 
              */
             resolveConflictFileNameSync(path: string, name: string, connectorSymbol?: string): string;
 
@@ -1121,7 +1108,6 @@ declare global {
              * Consumers usually use this value to set top margin/inset.
              */
             readonly height: number;
-            refreshLayout(): void;
         }
 
         export type RenderTemplateOptions = {
@@ -1347,6 +1333,11 @@ declare global {
              * @param keys The keys of the settings to push. If not specified, all settings are pushed.
              */
             push?(keys?: ReadonlyArray<string>): Promise<void>;
+
+            /**
+             * Flush the changes to the storage immediately. Only meaningful for settings with delayed saving.
+             */
+            flush?(): void;
         }
 
         export interface ICreateSettingsOptions {
@@ -1416,6 +1407,11 @@ declare global {
              * @returns The type name of the settings.
              */
             getSettingsType(name: string): string;
+
+            /**
+             * Flush the changes of all settings to the storage immediately. Only meaningful for settings with delayed saving.
+             */
+            flushChanges(): void;
         }
         export interface IServiceProvider {
             /**
@@ -1531,16 +1527,18 @@ declare global {
              * @param allowInternalGUIAssets Whether to allow internal GUI assets. Default is false.
              * @param needConfirm Whether to need confirm button. Default is false.
              */
-            show(popupOwner?: gui.Widget, initialValue?: string, assetTypeFilter?: AssetType[], allowInternalAssets?: boolean, customFilter?: string, allowInternalGUIAssets?: boolean, needConfirm?: boolean): Promise<void>;
+            show(popupOwner?: DialogPopupOwner, initialValue?: string, assetTypeFilter?: AssetType[], allowInternalAssets?: boolean, customFilter?: string, allowInternalGUIAssets?: boolean, needConfirm?: boolean): Promise<void>;
         }
+
         export interface ISelectNodeDialog extends IDialog {
             /**
              * Show the dialog.
              * @param popupOwner If the dialog is a popup window, it is used to calculate the popup position.
              * @param typeName The type name of the node. Default is "Node".
              */
-            show(popupOwner: gui.Widget, typeName?: string): Promise<void>;
+            show(popupOwner: DialogPopupOwner, typeName?: string): Promise<void>;
         }
+
         export interface ISceneManager extends gui.EventDispatcher {
             /**
              * Scene process is running in a webview. This is the webview instance.
@@ -1686,6 +1684,11 @@ declare global {
             appPath: string;
 
             /**
+             * The version of the application.
+             */
+            appVersion: string;
+
+            /**
              * The path of the user data. 
              * 
              * On Windows, it is c:/Users/username/AppData/Roaming/LayaAirIDE
@@ -1747,8 +1750,10 @@ declare global {
 
             /**
              * If the app is in the cli mode. A cli mode is a mode that runs the app in the command line.
+             * - watch: The app is running in the watch mode, which watches the file changes and compiles scripts.
+             * - run: The app is running in the run mode, which runs the script and exits.
              */
-            cliMode: boolean;
+            cliMode: false | "watch" | "run";
         }
 
         export interface IRendererStartupAction {
@@ -1777,6 +1782,7 @@ declare global {
              */
             [index: string]: any;
         }
+
 
         export interface IRender3DCanvas extends gui.Widget {
             /**
@@ -1845,64 +1851,9 @@ declare global {
         }
 
         /**
-         * A gui.Widget subclass that hosts React content inside a Shadow DOM.
+         * A gui.Widget subclass that hosts React content.
          *
          * Integrates into the FairyGUI hierarchy via `parent.addChild(reactDOM)`.
-         * Shadow DOM isolates CSS — editor styles don't affect React content and
-         * vice versa. A base dark-theme stylesheet is automatically injected.
-         *
-         * ## Built-in Theme
-         *
-         * The base stylesheet provides a dark theme matching the editor's look.
-         * Plugins can use these directly without writing any CSS.
-         *
-         * **CSS Custom Properties** (override via `:host { --accent: newValue; }` in your CSS):
-         *
-         * | Variable | Description |
-         * |---|---|
-         * | `--bg-darkest` | Deepest background |
-         * | `--bg-dark` | Dark background |
-         * | `--bg-base` | Standard panel background |
-         * | `--bg-elevated` | Elevated surface (tooltips, popups) |
-         * | `--bg-surface` | Button / card background |
-         * | `--bg-hover` | Button/control hover background (NOT for list items) |
-         * | `--bg-pressed` | Pressed / active state |
-         * | `--bg-input` | Input field background |
-         * | `--accent` | Accent color (focus rings, checkboxes, links, selections) |
-         * | `--accent-hover` | Accent hover |
-         * | `--accent-muted` | List item / row hover background |
-         * | `--accent-strong` | Strong accent (selection) |
-         * | `--primary` | Primary button background |
-         * | `--primary-hover` | Primary button hover |
-         * | `--primary-text` | Primary button text |
-         * | `--text` | Default text |
-         * | `--text-bright` | Bright text (headings, active tab) |
-         * | `--text-muted` | Secondary text (placeholders, inactive hints) |
-         * | `--text-disabled` | Disabled text |
-         * | `--border` | Default border |
-         * | `--border-light` | Light border |
-         * | `--radius` | Default border radius |
-         * | `--font-size` | Base font size |
-         *
-         * **Styled HTML elements** (no class needed):
-         * `<button>`, `<input>`, `<textarea>`, `<select>`, `<table>`, `<th>`, `<td>`, `<a>`, `<code>`, `<pre>`, `<hr>`
-         *
-         * **Component classes**:
-         * - `.btn-primary` / `button.primary` — primary button (`--primary` blue)
-         * - `.btn-icon` / `button.icon` — small square icon button, no border
-         * - `.list-item` — list row with hover/selected states (use `.selected` or `aria-selected`)
-         * - `.tab` — tab button (use `.active` or `aria-selected` for current tab)
-         * - `.panel` / `.panel-header` / `.panel-body` — bordered section container
-         * - `.menu` / `.menu-item` / `.menu-divider` — popup menu (also works with `role` attributes)
-         * - `.tooltip` — tooltip popup
-         * - `.badge` — small rounded label
-         * - `.label` — form label (default text color, no-select)
-         *
-         * **Utility classes**:
-         * `.flex`, `.flex-col`, `.flex-row`, `.flex-1`, `.items-center`, `.justify-between`, `.justify-center`,
-         * `.gap-1`, `.gap-2`, `.gap-3`, `.p-1`–`.p-3`, `.px-1`–`.px-2`, `.py-1`–`.py-2`,
-         * `.m-1`–`.m-2`, `.w-full`, `.h-full`, `.overflow-auto`, `.truncate`, `.text-center`, `.text-muted`,
-         * `.text-bright`, `.text-sm`, `.text-lg`, `.hidden`, `.pointer`, `.select-none`
          *
          * @example Panel usage:
          * ```tsx
@@ -1936,7 +1887,7 @@ declare global {
              * Use as a container for React Portals (dropdowns, modals, tooltips)
              * that need to stay within the style-isolated boundary.
              */
-            readonly shadowRoot: ShadowRoot;
+            readonly shadowRoot: ShadowRoot | null;
 
             /**
              * The mount point div inside the Shadow DOM where React content is rendered.
@@ -1982,14 +1933,446 @@ declare global {
             dispose(): void;
         }
 
+        /** Displays an editor image or icon resolved from an editor URL, asset URL, or file URL. */
+        export interface EditorImageProps {
+            /** Image source. Supports editor resource URLs, asset URLs, file/data/blob/http URLs, and thumbnail URLs. */
+            src?: string;
+            /** Additional CSS class for the image wrapper. Defaults to the small icon style. */
+            className?: string;
+            /** Name written to the wrapper's data-icon attribute. Inferred from src when omitted. */
+            iconName?: string;
+            /** Set true to render an empty icon slot when the image source is missing or unresolved. */
+            placeholder?: boolean;
+        }
+
+        /** Renders translated editor text, optionally parsed as UBB or HTML. */
+        export interface LocalizedTextProps {
+            /** Translation key or literal text. */
+            value: string;
+            /** Variables passed to the translation formatter. */
+            options?: Record<string, unknown>;
+            /** Parse the translated text as UBB markup before rendering. */
+            ubb?: boolean;
+            /** Render the translated text as HTML. */
+            html?: boolean;
+        }
+
+        /** Input for selecting, displaying, dragging, and clearing a scene node reference. */
+        export interface NodeRefInputProps {
+            /** A resolved node, or serialized reference data containing _$ref and optional _$missing. */
+            value?: IMyNode | Record<string, unknown> | null;
+            /** Disables selection, drag/drop, and keyboard clearing. */
+            disabled?: boolean;
+            /** Allowed node or component type names. Component filters commit the matched component type. */
+            typeFilter?: string[];
+            /** CSS class for the root element. Defaults to the standard node reference input style. */
+            className?: string;
+            /** Called after the selected node is validated. compType is set when a component filter matched. */
+            onCommit(node: IMyNode | null, compType?: string): void | Promise<void>;
+            /** Called when serialized reference data has been resolved to a node, or failed to resolve. */
+            onNodeResolved?(node: IMyNode | null): void;
+        }
+
+        /** Input for selecting, displaying, dragging, copying, pasting, and clearing an asset reference. */
+        export interface ResourceInputProps {
+            /** Asset id/text, a resolved asset, or null for an empty value. */
+            value?: string | IAssetInfo | null;
+            /** Disables selection, drag/drop, keyboard editing, and menu actions that change the value. */
+            disabled?: boolean;
+            /** Allowed asset types. Values may be AssetType enum members or their string names. */
+            typeFilter?: Array<AssetType | string>;
+            /** Whether built-in editor assets can be selected. Defaults to true. */
+            allowInternalAssets?: boolean;
+            /** Whether built-in GUI assets can be selected. Defaults to false. */
+            allowInternalGUIAssets?: boolean;
+            /** Extra filter expression forwarded to the resource selection dialog. */
+            customFilter?: string;
+            /** Text shown in the empty state instead of the type-derived prompt. */
+            placeholder?: string;
+            /** CSS class for the root element. */
+            className?: string;
+            /** Commits both the serialized text value and the resolved asset, when available. */
+            onCommit(text: string, asset: IAssetInfo | null): void;
+            /** Called when the empty input is double-clicked to create or choose a new resource. */
+            onCreate?(): void | Promise<void>;
+        }
+
+        /** Color picker input. Color serialization and format conversion are handled by the caller. */
+        export interface ColorInputProps {
+            /** Current color, or null when a checkable input is unchecked. */
+            value?: gui.Color | null;
+            /** Color used when value is null but the input needs a preview or restored checked value. */
+            defaultValue?: gui.Color;
+            /** Disables toggling, editing, and paste. */
+            readonly?: boolean;
+            /** Forces committed colors to have alpha 1 and hides alpha editing. */
+            hideAlpha?: boolean;
+            /** Shows a checkbox that allows committing null. */
+            checkable?: boolean;
+            /** Commits the selected color, or null when unchecked. */
+            onCommit(value: gui.Color | null): void;
+        }
+
+        /** Shared options for gradient editing. */
+        export interface GradientInputOptions {
+            /** Gradient editor lock mode. */
+            lockMode?: number;
+            /** Maximum number of alpha stops. Zero or undefined means editor default. */
+            maxAlphaNum?: number;
+            /** Maximum number of color stops. Zero or undefined means editor default. */
+            maxColorNum?: number;
+        }
+
+        /** Editable gradient value used by the React gradient input. */
+        export interface GradientInputValue {
+            /** Gradient interpolation mode. */
+            mode: number;
+            /** Color stops. */
+            rgbElements: Array<{
+                /** Stop position normalized to 0..1. */
+                pos: number;
+                /** Stop color. */
+                color: gui.Color;
+            }>;
+            /** Number of active color stops in rgbElements. */
+            rgbCount: number;
+            /** Alpha stops. */
+            alphaElements: Array<{
+                /** Stop position normalized to 0..1. */
+                pos: number;
+                /** Alpha value normalized to 0..1. */
+                alpha: number;
+            }>;
+            /** Number of active alpha stops in alphaElements. */
+            alphaCount: number;
+        }
+
+        /** Gradient picker input. Data serialization is handled by the caller. */
+        export interface GradientInputProps extends GradientInputOptions {
+            /** Current gradient, or null when a checkable input is unchecked. */
+            value?: GradientInputValue | null;
+            /** Gradient used when value is null and a checked value needs to be created. */
+            defaultValue?: GradientInputValue;
+            /** Disables toggling, editing, and paste. */
+            readonly?: boolean;
+            /** Shows a checkbox that allows committing null. */
+            checkable?: boolean;
+            /** Hides alpha editing in the gradient editor. */
+            hideAlpha?: boolean;
+            /** Commits the edited gradient, or null when unchecked. */
+            onCommit(value: GradientInputValue | null): void;
+        }
+
+        /** Shared options that shape curve editing and preview behavior. */
+        export interface CurveInputOptions {
+            /** Minimum allowed key value. */
+            min?: number;
+            /** Maximum allowed key value. */
+            max?: number;
+            /** Maximum number of keyframes allowed in the editor. */
+            maxKeyFrame?: number;
+            /** Whether the value represents an editable curve instead of a single scalar-style value. */
+            isCurve?: boolean;
+            /** Enables weighted tangent editing. */
+            isWeight?: boolean;
+            /** Forces start and end keys to exist. */
+            forceStartEndKeys?: boolean;
+            /** Normalizes displayed curve values into the curve range. */
+            isNormalization?: boolean;
+            /** Automatically fills missing keyframe data when editing. */
+            isAutoFillKeyFrame?: boolean;
+            /** Lower preview/editor range for the curve graph. */
+            curveMin?: number;
+            /** Upper preview/editor range for the curve graph. */
+            curveMax?: number;
+        }
+
+        /** One curve keyframe. Tangent and weight fields use the same numeric conventions as the curve editor. */
+        export interface CurveInputKey {
+            /** Key time. */
+            time: number;
+            /** Key value. */
+            value: number;
+            /** Outgoing tangent. */
+            outTangent?: number;
+            /** Outgoing tangent weight. */
+            outWeight?: number;
+            /** Incoming tangent. */
+            inTangent?: number;
+            /** Incoming tangent weight. */
+            inWeight?: number;
+            /** Weighted tangent mode. */
+            weightedMode?: number;
+        }
+
+        /** Editable curve value used by the React curve input. */
+        export interface CurveInputValue {
+            /** Ordered curve keys. */
+            keys: CurveInputKey[];
+            /** Lower preview/editor range for this value. */
+            curveMin: number;
+            /** Upper preview/editor range for this value. */
+            curveMax: number;
+        }
+
+        /** Curve editor input. Data serialization is handled by the caller. */
+        export interface CurveInputProps extends CurveInputOptions {
+            /** Current curve, or null when a checkable input is unchecked. */
+            value?: CurveInputValue | null;
+            /** Curve used when value is null and a checked value needs to be created. */
+            defaultValue?: CurveInputValue;
+            /** Disables toggling and editing. */
+            readonly?: boolean;
+            /** Shows a checkbox that allows committing null. */
+            checkable?: boolean;
+            /** Commits the edited curve, or null when unchecked. */
+            onCommit(value: CurveInputValue | null): void;
+        }
+
+        /** Text input with optional multiline, password, and editor i18n support. */
+        export interface TextInputProps {
+            /** Current text. Null and undefined are displayed as an empty string. */
+            value?: string | null;
+            /** Disables text editing and i18n actions. */
+            readonly?: boolean;
+            /** Placeholder text or translation key. */
+            placeholder?: string;
+            /** Renders a textarea that grows to fit its content. */
+            multiline?: boolean;
+            /** Renders a password input. Ignored for multiline inputs. */
+            password?: boolean;
+            /** Commits on every keystroke instead of only blur or Enter. */
+            submitOnTyping?: boolean;
+            /** Enables editor translation-key editing for the value. */
+            multiLanguage?: boolean;
+            /** Commits the text. Return false to reject and reset the displayed text. */
+            onCommit(value: string): boolean;
+        }
+
+        /** Search box with a leading search icon and clear button. */
+        export interface SearchInputProps {
+            /** Current search text. */
+            value: string;
+            /** Called whenever the search text changes. */
+            onChange(value: string): void;
+            /** Placeholder text. */
+            placeholder?: string;
+            /** Focuses the input after mount. */
+            autoFocus?: boolean;
+            /** CSS class for the root element. */
+            className?: string;
+            /** Optional key handler for the underlying input. */
+            onKeyDown?(event: React.KeyboardEvent<HTMLInputElement>): void;
+        }
+
+        /** Numeric input that supports typing, mouse drag stepping, and mouse wheel stepping while focused. */
+        export interface NumericInputProps {
+            /** Current numeric value. */
+            value: number;
+            /** Disables editing and stepping. */
+            disabled?: boolean;
+            /** Minimum allowed value. */
+            min?: number;
+            /** Maximum allowed value. */
+            max?: number;
+            /** Step used by drag, wheel, and slider controls. Defaults to the component step. */
+            step?: number;
+            /** Number of digits kept after the decimal point. */
+            fractionDigits?: number;
+            /** React content displayed before the input text. */
+            prefix?: React.ReactNode;
+            /** Text displayed after the input and ignored when parsing typed input. */
+            suffix?: string;
+            /** CSS class for the root element. */
+            className?: string;
+            /** Commits the number. Return false to reject and reset the displayed value. */
+            onCommit(value: number): boolean | void;
+        }
+
+        /** Numeric input paired with a range slider. */
+        export interface NumericInputWithSliderProps extends NumericInputProps {
+            /** Minimum slider value. Falls back to min or 0. */
+            sliderMin?: number;
+            /** Maximum slider value. Falls back to max or 100. */
+            sliderMax?: number;
+            /** Uses a symmetric slider mapping around value 1 for scale-like values. */
+            centeredAtOne?: boolean;
+        }
+
+        /** One option in SelectInput. */
+        export interface SelectInputOption {
+            /** Serialized option value. */
+            value: string;
+            /** Display label. Defaults to value. */
+            label?: string;
+            /** Prevents this option from being selected. */
+            disabled?: boolean;
+            /** Tooltip text or translation key. */
+            title?: string;
+        }
+
+        /** Button-style select input backed by a Popup list. */
+        export interface SelectInputProps {
+            /** Current selected value. */
+            value?: string;
+            /** Static option list. */
+            items?: SelectInputOption[];
+            /** Disables opening and selection. */
+            disabled?: boolean;
+            /** CSS class for the trigger button. */
+            className?: string;
+            /** Inline style for the trigger button. */
+            style?: React.CSSProperties;
+            /** Extra CSS class for the popup list container. */
+            popupClassName?: string;
+            /** Text shown when no item matches the current value. */
+            placeholder?: string;
+            /** Maximum number of visible items before scrolling. Defaults to 20. */
+            visibleItemCount?: number;
+            /** Optionally provides or refreshes the item list before the popup opens. */
+            onBeforeOpen?(): SelectInputOption[] | void | Promise<SelectInputOption[] | void>;
+            /** Called when an enabled option is selected. */
+            onChange(value: string, item: SelectInputOption): void;
+        }
+
+        /** Wraps children with the editor tooltip behavior. */
+        export interface TooltipTargetProps {
+            /** Tooltip text. Null, undefined, and empty values disable the tooltip. */
+            tips?: string | null;
+            /** Element that should receive the tooltip. */
+            children: React.ReactNode;
+        }
+
+        /** Render props passed to Popup trigger renderers. */
+        export interface PopupTriggerProps {
+            /** Ref that must be attached to the trigger or anchor element. */
+            ref: React.RefObject<HTMLElement>;
+            /** Whether the popup is currently open. */
+            open: boolean;
+            /** Opens or cancels the popup depending on current state. */
+            toggle(): void;
+            /** Opens the popup. */
+            openPopup(): void;
+            /** Cancels/closes the popup. */
+            closePopup(): void;
+        }
+
+        /** Anchored popup that portals into the owner document or shadow root. */
+        export interface PopupProps {
+            /** Anchor element used for positioning. If omitted, use renderTrigger's ref. */
+            anchorRef?: React.RefObject<HTMLElement>;
+            /** Controlled open state. If omitted, Popup manages its own state. */
+            open?: boolean;
+            /** Requested popup width. The final width is at least the anchor width. */
+            width?: number;
+            /** Maximum popup height before viewport clamping. */
+            maxHeight?: number;
+            /** Gap in pixels between the anchor and the popup. */
+            gap?: number;
+            /** CSS class for the popup element. */
+            className?: string;
+            /** Called when the popup closes normally, such as by outside click. */
+            onClose?: () => void;
+            /** Called when the popup is opened. */
+            onOpen?: () => void;
+            /** Called when the popup is cancelled, such as by Escape or trigger toggle while open. */
+            onCancel?: () => void;
+            /** Renders the trigger and receives helpers for controlling the popup. */
+            renderTrigger?: (props: PopupTriggerProps) => React.ReactNode;
+            /** Popup content. */
+            children: React.ReactNode;
+        }
+
+        /** Orientation of a draggable resize handle. */
+        export type ResizeHandleOrientation = "vertical" | "horizontal";
+
+        /** Initial resize state returned when a resize drag starts. */
+        export interface ResizeHandleStart {
+            /** Starting value before pointer movement is applied. */
+            value: number;
+            /** Minimum allowed value for this drag. */
+            min?: number;
+            /** Maximum allowed value for this drag. */
+            max?: number;
+        }
+
+        /** Draggable separator used to resize panes or numeric dimensions. */
+        export interface ResizeHandleProps {
+            /** Extra CSS class for the handle element. */
+            className?: string;
+            /** Inline style for the handle element. */
+            style?: React.CSSProperties;
+            /** Drag axis. Vertical handles change value from horizontal pointer movement. */
+            orientation: ResizeHandleOrientation;
+            /** Accessible label for the separator. */
+            ariaLabel?: string;
+            /** Current value used for keyboard resizing and ARIA state. */
+            value?: number;
+            /** Minimum allowed value. */
+            min?: number;
+            /** Maximum allowed value. */
+            max?: number;
+            /** Step used for keyboard resizing. Defaults to 10. */
+            keyboardStep?: number;
+            /** CSS cursor shown during resize. Defaults to orientation-specific resize cursor. */
+            cursor?: string;
+            /** Reverses pointer and keyboard delta direction. */
+            reverse?: boolean;
+            /** Disables pointer and keyboard resizing. */
+            disabled?: boolean;
+            /** Optional content rendered inside the handle. */
+            children?: React.ReactNode;
+            /** Optionally provides drag start value and limits. Return false to cancel the drag. */
+            onResizeStart?(event: React.PointerEvent<HTMLDivElement>): ResizeHandleStart | false | void;
+            /** Called with the resized value. */
+            onResize(value: number, event?: PointerEvent): void;
+            /** Called on double-click or Enter when provided. */
+            onReset?(): void;
+        }
+
+        /** React component entry points exposed to editor plugins and external React integrations. */
+        export namespace ReactComponents {
+            /** Displays an editor image or icon. */
+            const EditorImage: (props: EditorImageProps) => React.ReactNode;
+            /** Renders translated editor text. */
+            const LocalizedText: (props: LocalizedTextProps) => React.ReactNode;
+            /** Selects and displays a scene node reference. */
+            const NodeRefInput: (props: NodeRefInputProps) => React.ReactNode;
+            /** Selects and displays an asset reference. */
+            const ResourceInput: (props: ResourceInputProps) => React.ReactNode;
+            /** Edits a gui.Color value. */
+            const ColorInput: (props: ColorInputProps) => React.ReactNode;
+            /** Edits a gradient value. */
+            const GradientInput: (props: GradientInputProps) => React.ReactNode;
+            /** Edits a curve value. */
+            const CurveInput: (props: CurveInputProps) => React.ReactNode;
+            /** Edits text. */
+            const TextInput: (props: TextInputProps) => React.ReactNode;
+            /** Edits search text. */
+            const SearchInput: (props: SearchInputProps) => React.ReactNode;
+            /** Edits a number. */
+            const NumericInput: (props: NumericInputProps) => React.ReactNode;
+            /** Edits a number with a slider. */
+            const NumericInputWithSlider: (props: NumericInputWithSliderProps) => React.ReactNode;
+            /** Selects one option from a list. */
+            const SelectInput: (props: SelectInputProps) => React.ReactNode;
+            /** Adds editor tooltip behavior to children. */
+            const TooltipTarget: (props: TooltipTargetProps) => React.ReactNode;
+            /** Renders anchored popup content. */
+            const Popup: (props: PopupProps) => React.ReactNode;
+            /** Drags or keyboard-adjusts a value for pane and dimension resizing. */
+            const ResizeHandle: (props: ResizeHandleProps) => React.ReactNode;
+        }
+
         export interface IQRCodeDialog extends IDialog {
             /**
              * Show the dialog.
              * @param popupOwner If the dialog is a popup window, it is used to calculate the popup position.
              * @param url The URL to generate the QR code.
              */
-            show(popupOwner: gui.Widget, url: string): Promise<void>;
+            show(popupOwner: DialogPopupOwner, url: string): Promise<void>;
         }
+
         export interface IPropertyFieldCreateResult {
             /**
              * Display widget of the property field.
@@ -2193,6 +2576,213 @@ declare global {
              * Check if any clipboard data that can be pasted.
              */
             hasClipboardData(): boolean;
+        }
+
+        /**
+         * The numeric `type` value used to mark a template as user-imported local template.
+         * Built-in / cloud templates use small numbers (0 core, 1 sample, 2 learning, 4 purchased);
+         * the local type sits above that range to avoid collisions.
+         */
+        export const LOCAL_TYPE = 100000000;
+
+        /**
+         * Where a template comes from. Used together with the template name to uniquely reference
+         * a template via {@link IProjectTemplateManager.findTemplate}.
+         *
+         * - `builtin` — shipped with the IDE under `unpackedWebRootPath/template/project/`.
+         * - `cloud` — published on the LayaAir template server; may or may not be downloaded locally.
+         * - `local` — imported by the user from a zip, stored under `LocalTemplate/`.
+         * - `purchased` — purchased on the LayaAir asset store.
+         */
+        export type TemplateSource = 'builtin' | 'cloud' | 'local' | 'purchased';
+
+        /**
+         * Describes a single template entry tracked by the project manager.
+         *
+         * A template may be fully local (built-in / downloaded / user-imported), fully remote
+         * (only a cloud listing entry), or a hybrid (local copy of a remote template, possibly outdated).
+         *
+         * The raw bilingual fields in `info` / `netInfo` are kept untouched — callers reading
+         * `info.name` get the Chinese name, `info.en?.name` the English. View code is responsible
+         * for picking the right one based on the current language.
+         */
+        export interface ITemplateData {
+            /**
+             * Where this template comes from. Combined with the template name, this is the stable
+             * coordinate used by {@link IProjectTemplateManager.findTemplate}.
+             */
+            source: TemplateSource;
+
+            /**
+             * Remote metadata fetched from the cloud project list.
+             * Present for templates that exist on the server. When `info` is missing but `netInfo` is set,
+             * the template has not been downloaded yet.
+             *
+             * Common fields: `name`, `desc`, `en.name`, `en.desc`, `id`, `ver`, `type`, `templateURL`, `preview`, `icon`.
+             */
+            netInfo?: any;
+
+            /**
+             * Local metadata parsed from `<dir>/<templateDirName>/info.json`.
+             * Present when the template is available locally. When missing, the template still needs to be downloaded.
+             *
+             * Common fields: `name`, `desc`, `en.name`, `en.desc`, `id`, `ver`, `type`, `ord`.
+             */
+            info?: any;
+
+            /**
+             * Absolute path of the template root directory on disk (parent of `templateDirName`).
+             * Empty / undefined for cloud-only entries.
+             */
+            dir?: string;
+
+            /**
+             * The metadata directory name inside `dir`, either `"templateInfo"` or `".templateInfo"`
+             * depending on how the template was packaged.
+             */
+            templateDirName?: string;
+
+            /**
+             * For purchased templates: the raw store resource object returned by the asset store API.
+             * Contains `resource_name`, `resource_description`, `resource_cover`, `version`, `size`, etc.
+             */
+            resource?: any;
+
+            /**
+             * For purchased templates: the store resource id.
+             */
+            resource_id?: any;
+
+            /**
+             * For purchased templates: the per-user purchase id used to request the download URL.
+             */
+            user_resource_id?: any;
+
+            /**
+             * For purchased templates: human-readable purchase timestamp from the store API.
+             */
+            ['@timestamp_format']?: string;
+        }
+
+        /**
+         * Parameters for {@link IProjectTemplateManager.createProject}.
+         */
+        export interface ICreateProjectOptions {
+            /** Project name. Used both as the `.laya` descriptor filename and (when `subdir` is true) as the leaf directory name. */
+            name: string;
+
+            /** Parent directory the project should be created under. */
+            path: string;
+
+            /** When true, the project is created at `path/name/`. When false, files are written directly into `path`. */
+            subdir?: boolean;
+
+            /** The template to instantiate from. Must already be downloaded (have `info` and `dir`). */
+            template?: ITemplateData;
+        }
+
+        export interface IProjectTemplateManager {
+            /**
+             * Load the full template catalog: built-in templates, downloaded cloud templates,
+             * user-imported local templates, the remote project list, and the purchased list.
+             *
+             * Idempotent and reentrant — concurrent or repeated calls return the same in-flight promise
+             * instead of reloading.
+             */
+            loadTemplates(): Promise<void>;
+
+            /**
+             * Rescan the user's `LocalTemplate/` directory and update {@link templates}.
+             * Use after importing or deleting a local template to reflect the change without a full reload.
+             */
+            refreshLocalTemplates(): void;
+
+            /**
+             * The current template catalog. Mutated in place when templates are downloaded, imported,
+             * renamed, or deleted — readers should re-render after invoking any mutating method.
+             */
+            readonly templates: ReadonlyArray<ITemplateData>;
+
+            /**
+             * Purchased-template entries fetched from the store API during {@link loadTemplates}.
+             * Empty when the user is offline or not signed in.
+             */
+            readonly purchasedList: ReadonlyArray<any>;
+
+            /**
+             * Look up a template by its source and name. Matches against the Chinese name (`info.name`
+             * / `netInfo.name` / `resource.resource_name`) as well as the English name (`info.en.name`
+             * / `netInfo.en.name`), so callers can use whichever they have.
+             *
+             * If multiple templates share the same name within a source (e.g. two user-imported local
+             * templates with the same name), the first match in catalog order is returned.
+             *
+             * @param source - Where to look. See {@link TemplateSource}.
+             * @param name - The Chinese or English display name of the template.
+             * @returns The matching template, or `undefined` if not found.
+             */
+            findTemplate(source: TemplateSource, name: string): ITemplateData | undefined;
+
+            /**
+             * Synthesize an {@link ITemplateData} from a raw entry in {@link purchasedList}.
+             * Purchased templates are kept as raw store-API rows; this turns one into the unified
+             * template shape so the rest of the pipeline (`createProject`, `downloadProjectTemplate`,
+             * view models) can treat it the same as any other template.
+             */
+            buildPurchasedTemplate(entry: any): ITemplateData;
+
+            /**
+             * Download (or re-download) the zip for a template and unpack it into the cache directory.
+             * Updates `data.info` / `data.dir` / `data.templateDirName` on success so the template
+             * becomes usable for {@link createProject}.
+             *
+             * Concurrent calls for the same template URL share a single download — additional callers
+             * piggyback on the in-flight progress.
+             *
+             * @param data - The template entry to download. Must have `netInfo` (built-in/cloud) or `user_resource_id` (purchased).
+             * @param progressCallback - Receives integer progress in `[0, 100]`. Called with `100` after the local data update completes.
+             * @returns `true` if the download/unpack succeeded; `false` if no download URL could be resolved.
+             */
+            downloadProjectTemplate(
+                data: ITemplateData,
+                progressCallback?: (progress: number) => void
+            ): Promise<boolean>;
+
+            /**
+             * Import a user-supplied template zip into `LocalTemplate/`. The zip is unpacked, its
+             * `info.json` is normalized (with `type = LOCAL_TYPE`), and {@link templates} is updated.
+             *
+             * @param zipPath - Absolute path of the zip file to import.
+             */
+            importLocalTemplate(zipPath: string): Promise<void>;
+
+            /**
+             * Delete a user-imported local template from disk and remove it from {@link templates}.
+             * No-op for non-local templates or entries whose `dir` no longer exists.
+             */
+            deleteLocalTemplate(data: ITemplateData): void;
+
+            /**
+             * Rename a user-imported local template. Updates the in-memory `data.info.name` and
+             * writes the change back to the on-disk `info.json`.
+             */
+            setLocalTemplateName(data: ITemplateData, name: string): void;
+
+            /**
+             * Create a new project on disk from a template:
+             * write the `.laya` descriptor, scaffold the standard subdirectories, overlay the `common`
+             * base layer and the chosen template, and copy engine `.d.ts` files.
+             *
+             * @returns The absolute path of the created project root.
+             */
+            createProject(opts: ICreateProjectOptions): Promise<string>;
+
+            /**
+             * Clear the template download cache: remove cached zip / extracted directories and reset
+             * the in-memory dedupe map. Entries in {@link templates} that pointed into the cache are
+             * downgraded back to cloud-only state (their `info` / `dir` are cleared).
+             */
+            clearTemplateCache(): Promise<void>;
         }
 
         export interface IProjectPanel extends IEditorPanel {
@@ -3634,6 +4224,7 @@ declare global {
              * @returns The module.
              */
             getModule(id: string): Readonly<IModuleInfo>;
+
             /**
              * Show module installation dialog if any of the modules is not installed.
              * @param modules Identifiers of the modules.
@@ -3642,6 +4233,22 @@ declare global {
              * @returns Whether the installation is successful.
              */
             installModules(modules: Array<string>, alert?: boolean, waitForComplete?: boolean): Promise<boolean>;
+
+            /**
+             * Gather modules to install, including the specified modules and their dependencies.
+             * @param ids Identifiers of the modules to install.
+             * @returns The modules to install. 
+             */
+            gatherModulesToInstall(ids: Array<string>): Array<IModuleInfo>;
+
+            /**
+             * Install a module.
+             * @param id The identifier of the module to install.
+             * @param progressCallback Callback function to report the progress of the operation. The name parameter is the name of the current downloading/installing file. The phase value is 0 or 1, 0 for downloading and 1 for installing. The loaded and total values are the loaded and total bytes of the current phase, respectively.
+             * @param abortToken Abort token. If you want to abort the operation on some conditions, you can pass an abort token here. Call abortToken.signal() to abort the operation.
+             * @returns Whether the installation is successful.
+             */
+            installModule(id: string, progressCallback?: (name: string, phase: number, loaded: number, total: number) => void, abortToken?: IAbortToken): Promise<boolean>;
         }
         export interface IMenuItem {
             /**
@@ -4463,8 +5070,9 @@ declare global {
              * @param text Default text. 
              * @param multiline Whether the input text is multiline. 
              */
-            show(popupOwner: gui.Widget, msg?: string, text?: string, multiline?: boolean): Promise<void>;
+            show(popupOwner: DialogPopupOwner, msg?: string, text?: string, multiline?: boolean): Promise<void>;
         }
+
         export interface IHotkeyManager {
             /**
              * Install the hotkey manager to the given groot.
@@ -5102,6 +5710,11 @@ declare global {
             readonly appPath: string;
 
             /**
+             * The version of the application.
+             */
+            readonly appVersion: string;
+
+            /**
              * The path of the user data. 
              * 
              * On Windows, it is c:/Users/username/AppData/Roaming/LayaAirIDE
@@ -5166,7 +5779,7 @@ declare global {
             /**
              * Whether the app is in the cli mode. A cli mode is a mode that runs the app in the command line.
              */
-            readonly cliMode: boolean;
+            readonly cliMode: IRendererInfo['cliMode'];
 
             /**
              * The type registry of the editor.
@@ -5370,7 +5983,7 @@ declare global {
              * @param args The arguments of the dialog. The arguments are passed to the onShown method of the dialog.
              * @return The dialog object.
              */
-            showDialog<T extends IDialog>(cls: gui.Constructor<T>, popupOwner?: gui.Widget, ...args: any[]): Promise<T>;
+            showDialog<T extends IDialog>(cls: gui.Constructor<T>, popupOwner?: gui.Widget | HTMLElement, ...args: any[]): Promise<T>;
 
             /**
              * Get the menu object by ID. Same as IEditor.Menu.getById function.
@@ -5396,7 +6009,7 @@ declare global {
              * @param widget The widget to show the error message. 
              * @param str The error message.
              */
-            showErrorTips(widget: gui.Widget, str: string): void;
+            showErrorTips(widget: gui.Widget | HTMLElement, str: string): void;
 
             /**
              * Clear all error message tooltips.
@@ -5653,6 +6266,7 @@ declare global {
              */
             onOpenFile?(filePath: string): void;
         }
+
         export type EditorPanelUsage = "common" | "project-settings" | "build-settings" | "preference" | "preview";
         /**
          * Options for the panel.
@@ -5816,6 +6430,11 @@ declare global {
              * @returns 
              */
             onExtensionReload?(): void;
+
+            /**
+             * Called when the editor is about to be closed or the panel is about to be destroyed, allowing you to save data and release resources. If there are multiple panels with onSave, they will be called sequentially, and the editor will wait for all of them to complete before closing.
+             */
+            onSave?(): Promise<void>;
         }
         export interface MessageBoxOptions {
             /**
@@ -6023,6 +6642,8 @@ declare global {
              */
             bookmark?: string;
         }
+        export type DialogPopupOwner = gui.Widget | HTMLElement;
+
         /**
          * Dialog interface. A dialog is a window that can be shown to the user.
          */
@@ -6104,7 +6725,7 @@ declare global {
             /**
              * Popup owner of the dialog, which is passed in show() method.
              */
-            get popupOwner(): gui.Widget;
+            get popupOwner(): DialogPopupOwner;
 
             /**
              * Whether the dialog is showing.
@@ -6116,7 +6737,7 @@ declare global {
              * @param popupOwner If the dialog is a popup window, it is used to calculate the popup position.
              * @param args Arguments passed to the onShown() method.
              */
-            show(popupOwner?: gui.Widget, ...args: any[]): Promise<void>;
+            show(popupOwner?: DialogPopupOwner, ...args: any[]): Promise<void>;
 
             /**
              * Hide the dialog.
@@ -7503,6 +8124,11 @@ declare global {
          */
         export interface IAssetDb {
             /**
+             * The id of the root asset, which is the project root folder.
+             */
+            readonly rootAssetId: string;
+
+            /**
              * Triggered when an asset is changed.
              * @param assetId The id of the asset.
              * @param assetPath The path of the asset.
@@ -7549,9 +8175,10 @@ declare global {
             /**
              * Get the asset by the id or path synchronously. Can only be used if the asset is already queried.
              * @param assetIdOrPath The id or path of the asset.
+             * @param allowResourcesSearch Whether to allow searching in the resources folder.
              * @returns The asset.
              */
-            getAssetSync(assetIdOrPath: string): IAssetInfo;
+            getAssetSync(assetIdOrPath: string, allowResourcesSearch?: boolean): IAssetInfo;
 
             /**
              * Get all parent assets of the specified asset id (including itself), arranged in order from the root directory to itself.
@@ -7699,6 +8326,13 @@ declare global {
             getFolderIcon(name: string): [string, string];
 
             /**
+             * Get the thumbnail image url of the asset. The thumbnail is a small image generated by the editor to represent the asset.
+             * @param assetId The id of the asset.
+             * @returns The thumbnail image url of the asset.
+             */
+            getAssetThumbnail(assetId: string): string;
+
+            /**
              * Get the thumbnail image url of the asset.
              * @param assetId The id of the asset.
              * @returns The thumbnail image url of the asset.
@@ -7788,7 +8422,7 @@ declare global {
             delete(assets: ReadonlyArray<IAssetInfo>): Promise<void>;
 
             /**
-             * Create a temporary asset. The temporary asset is not saved to the disk. It is internally used by AssetsPanel to create a new asset.
+             * Create a temporary asset. The temporary asset is not saved to the disk. It is internally used by AssetPanel to create a new asset.
              * @param fileName The name of the temporary asset.
              * @returns The temporary asset.
              */
@@ -7827,6 +8461,7 @@ declare global {
              */
             flushChanges(): Promise<void>;
         }
+
         /**
          * Interface for the Add Modules dialog.
          */
@@ -7836,8 +8471,9 @@ declare global {
              * @param popupOwner Popup owner.
              * @param selectedModules Selected modules. 
              */
-            show(popupOwner: gui.Widget, selectedModules?: Array<string>): Promise<void>;
+            show(popupOwner: DialogPopupOwner, selectedModules?: Array<string>): Promise<void>;
         }
+
         /**
          * Information about the current user.
          */
@@ -8763,7 +9399,7 @@ declare global {
              */
             queryToSaveAll(): Promise<boolean>;
         }
-        export interface IPlayControls extends gui.Widget {
+        export interface IPlayControls {
             /**
              * An behavior of the play button. If true, the play button will play the current scene. If false, the play button will play the startup scene.
              */
@@ -8822,6 +9458,7 @@ declare global {
              */
             getPlayURL(currentOrStartup?: boolean, additionParams?: Record<string, string>, player?: "browser" | "editor" | "emulator"): string;
         }
+
         export class Dialog<T extends gui.Widget = gui.Widget> implements IDialog {
             resizable: boolean;
             modal: boolean;
@@ -8840,6 +9477,7 @@ declare global {
             protected result: any;
             private _contentPane;
             private _popupOwner;
+            private _popupOwnerGRoot;
             private _popupOwnerDialogId;
             private _x;
             private _y;
@@ -8853,10 +9491,10 @@ declare global {
             constructor();
             get contentPane(): T;
             set contentPane(value: T);
-            get popupOwner(): gui.Widget;
+            get popupOwner(): DialogPopupOwner;
             get isShowing(): boolean;
             create(): Promise<void>;
-            show(popupOwner?: gui.Widget, ...args: any[]): Promise<void>;
+            show(popupOwner?: DialogPopupOwner, ...args: any[]): Promise<void>;
             hide(): void;
             getResult(): Promise<any>;
             dispose(): void;
@@ -8904,14 +9542,21 @@ declare global {
             onGlobalHotkey?(combo: string): boolean;
             onSearch?(searchKey: string): void;
             onExtensionReload?(): void;
+            onSave?(): Promise<void>;
         }
 
+        export interface ReactDOMOptions {
+            /**
+             * Whether to use Shadow DOM for style isolation. Defaults to `true`.
+             */
+            shadow?: boolean;
+        }
         /**
          * A gui.Widget subclass that hosts React content inside a Shadow DOM.
          *
          * Since it extends gui.Widget, add it to the FairyGUI hierarchy with
          * `parent.addChild(reactDOM)`. Shadow DOM provides CSS isolation.
-         * A base dark-theme stylesheet is automatically injected.
+         * Base theme and editor component stylesheets are automatically injected.
          *
          * Key APIs:
          * - `render(element)` — render or update React content (JSX).
@@ -8979,13 +9624,17 @@ declare global {
             private _mountPoint;
             private _cssSources;
             private _sheets;
+            private _styleElements;
             private _sheetDocument;
-            constructor();
+            private _useShadow;
+            private _wheelTarget;
+            private _onNativeWheel;
+            constructor(options?: ReactDOMOptions);
             /**
              * The Shadow Root. Useful for creating React Portals (dropdowns,
              * modals) that stay within the style-isolated boundary.
              */
-            get shadowRoot(): ShadowRoot;
+            get shadowRoot(): ShadowRoot | null;
             /**
              * The mount point element inside the Shadow DOM.
              */
@@ -9020,6 +9669,10 @@ declare global {
             private _rebuildSheets;
             private _createSheet;
             private _ensureSheetsDocument;
+            private _handleNativeWheel;
+            private _addStyleElement;
+            private _ensureStylesDocument;
+            private _rebuildStyleElements;
             /**
              * React hook for embedding a FairyGUI Widget inside React.
              *
@@ -9045,7 +9698,7 @@ declare global {
              * }
              * ```
              */
-            static useWidget(contentWidget: gui.Widget): import("react").RefObject<HTMLDivElement>;
+            static useWidget(contentWidget: gui.Widget): React.RefObject<HTMLDivElement>;
             /**
              * Create a minimal external store for bridging editor events into React.
              * Works with React 18's `useSyncExternalStore` hook.
@@ -9910,11 +10563,6 @@ declare global {
         const ZipFileR: new () => IZipFileR;
 
         /**
-         * The `InspectorItem` class is used to create an inspector item.
-         */
-        const InspectorItem: new () => gui.Button;
-
-        /**
          * The `AssetStoreTools` class is used to manage asset store tools.
          */
         const AssetStoreTools: typeof IAssetStoreTools;
@@ -10047,6 +10695,11 @@ declare global {
          * The `AssetDependencyTool` object is used to query asset dependencies and references.
          */
         const AssetDependencyTool: IAssetDependencyTool;
+
+        /**
+         * The `React` namespace contains React components that can be used in the editor.
+         */
+        const React: typeof ReactComponents;
 
         /**
          * References a commonjs module. You can import built-in Node.js modules such as: path, fs, child_process, etc. 

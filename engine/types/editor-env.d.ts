@@ -2406,9 +2406,10 @@ declare global {
              * @param points The path points.
              * @param lineColor The line color. Default is Color.CLEAR(transparent).
              * @param localOffset The local offset applied to all points.
+             * @param fixedLength If true, the handle will not allow adding new points or removing points. Default is false.
              * @param targetSpace The coordinate space used for snapping. Default is the same as worldMatrix.
              */
-            editCurvePath3D(worldMatrix: Laya.Matrix4x4, points: Laya.PathPoint[], lineColor?: Laya.Color, localOffset?: Laya.Vector3, targetSpace?: Laya.Matrix4x4): {
+            editCurvePath3D(worldMatrix: Laya.Matrix4x4, points: Laya.PathPoint[], lineColor?: Laya.Color, localOffset?: Laya.Vector3, fixedLength?: boolean, targetSpace?: Laya.Matrix4x4): {
                 valueChanged: boolean,
                 points: Laya.PathPoint[],
             };
@@ -3604,6 +3605,11 @@ declare global {
             readonly appPath: string;
 
             /**
+             * The version of the editor. It is in the form of "x.y.z".
+             */
+            readonly appVersion: string;
+
+            /**
              * The path of the user data. 
              * 
              * On Windows, it is c:/Users/username/AppData/Roaming/LayaAirIDE
@@ -3643,7 +3649,7 @@ declare global {
             /**
              * Whether the app is in the cli mode. A cli mode is a mode that runs the app in the command line.
              */
-            readonly cliMode: boolean;
+            readonly cliMode: IRendererInfo["cliMode"];
 
             /**
              * Whether the app is in the foreground.
@@ -3941,6 +3947,7 @@ declare global {
              */
             requestTempRealtimeRefresh(): void;
         }
+
         export namespace ICubemapTool {
             /**
              * Convert a raw pixel buffer to KTX format.
@@ -4980,6 +4987,11 @@ declare global {
             keepTextureSourceFile: boolean;
 
             /**
+             * Modules that need to be installed for this build. If any module listed here is not installed, the build will try to install it after onSetup and before onStart. 
+             */
+            requireModules: Array<string>;
+
+            /**
              * Additional engine js files can be added to the build.
              */
             engineLibs: Array<string>;
@@ -5316,12 +5328,22 @@ declare global {
              * @param allowOverwrite Whether to allow overwriting the existing asset. Default is true.
              * @returns The asset.
              */
-            createFileAsset(filePath: string, metaData?: any, allowOverwrite?: boolean): IAssetInfo;
+            createFile(filePath: string, metaData?: any, allowOverwrite?: boolean): Promise<IAssetInfo>;
 
             /**
              * Create a new folder asset with the specified path. If the folder already exists, the existing folder asset will be returned.
              * @param folderPath The path of the folder. The path is relative to the assets folder.
              * @returns The asset.
+             */
+            createFolder(folderPath: string, checkLetterCase?: boolean): Promise<IAssetInfo>;
+
+            /**
+             * @deprecated Use 'createFile' instead.
+             */
+            createFileAsset(filePath: string, metaData?: any, allowOverwrite?: boolean): IAssetInfo;
+
+            /**
+             * @deprecated Use 'createFolder' instead.
              */
             createFolderAsset(folderPath: string): IAssetInfo;
 
@@ -7624,6 +7646,11 @@ declare global {
              * @param keys The keys of the settings to push. If not specified, all settings are pushed.
              */
             push?(keys?: ReadonlyArray<string>): Promise<void>;
+
+            /**
+             * Flush the changes to the storage immediately. Only meaningful for settings with delayed saving.
+             */
+            flush?(): void;
         }
 
         export interface ICreateSettingsOptions {
@@ -7693,6 +7720,11 @@ declare global {
              * @returns The type name of the settings.
              */
             getSettingsType(name: string): string;
+
+            /**
+             * Flush the changes of all settings to the storage immediately. Only meaningful for settings with delayed saving.
+             */
+            flushChanges(): void;
         }
         export const ShaderTypePrefix = "Shader.";
         /**
@@ -8195,17 +8227,12 @@ declare global {
             fileExists(filePath: string): Promise<boolean>;
 
             /**
-             * Check if a filename conflicts in the specified folder. If there is a conflict, add a numeric suffix to the filename and continue checking until there is no conflict.
-             * @param path The folder path. 
-             * @param name The filename.
-             * @returns The new filename. 
+             * @deprecated Use `resolveConflictFileName` instead.
              */
             getNewFilePath(path: string, name: string): string;
 
             /**
              * Check if a filename conflicts in the specified folder. If there is a conflict, add a numeric suffix to the filename and continue checking until there is no conflict.
-             * 
-             * The difference with `getNewFilePath` is that it allows specifying a delimiter to connect the filename and the numeric suffix.
              * @param path The folder path.
              * @param name The filename. 
              * @param connectorSymbol The delimiter to connect the filename and the numeric suffix. The default is "_".
@@ -8214,15 +8241,7 @@ declare global {
             resolveConflictFileName(path: string, name: string, connectorSymbol?: string): Promise<string>;
 
             /**
-             * Check if a filename conflicts in the specified folder. If there is a conflict, add a numeric suffix to the filename and continue checking until there is no conflict.
-             * 
-             * The difference with `getNewFilePath` is that it allows specifying a delimiter to connect the filename and the numeric suffix.
-             * 
-             * This is the synchronous version of `resolveConflictFileName`.
-             * @param path The folder path. 
-             * @param name The filename. 
-             * @param connectorSymbol The delimiter to connect the filename and the numeric suffix. The default is "_".
-             * @returns The new filename. 
+             * @deprecated Use `resolveConflictFileName` instead. 
              */
             resolveConflictFileNameSync(path: string, name: string, connectorSymbol?: string): string;
 

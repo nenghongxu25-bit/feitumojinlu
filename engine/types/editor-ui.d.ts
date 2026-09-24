@@ -2336,6 +2336,7 @@ declare namespace gui {
         _giveHeight: number;
         sourceWidth: number;
         sourceHeight: number;
+        static findOwnerWidget(element: HTMLElement): Widget;
         constructor();
         get id(): string;
         get name(): string;

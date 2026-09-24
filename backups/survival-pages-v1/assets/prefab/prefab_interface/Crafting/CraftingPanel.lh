@@ -1,0 +1,735 @@
+{
+  "_$ver": 1,
+  "_$id": "89w7gnf0",
+  "_$type": "GWidget",
+  "width": 1334,
+  "height": 750,
+  "_$comp": [
+    {
+      "_$type": "0cf8b546-fb6f-4449-bef8-7e884849f1d5",
+      "scriptPath": "../src/PlayUI/Crafting/CraftingPanel.ts",
+      "stationPanelNode": {
+        "_$ref": "wn2b0lcp"
+      },
+      "recipeListNode": {
+        "_$ref": "57r39bvn"
+      },
+      "inputListNode": {
+        "_$ref": "4onm4ehh"
+      },
+      "outputBoxNode": {
+        "_$ref": "xkxigm18"
+      },
+      "recipeNameText": {
+        "_$ref": "recipe_name"
+      },
+      "campfireButton": {
+        "_$ref": "5dkdmbeh"
+      },
+      "pengrenjiButton": {
+        "_$ref": "d1llbzpk"
+      },
+      "processingButton": {
+        "_$ref": "okl86u3m"
+      },
+      "equipmentButton": {
+        "_$ref": "w9imh9rs"
+      },
+      "manufactureButton": {
+        "_$ref": "deyul414"
+      },
+      "medicineButton": {
+        "_$ref": "2ifxqi9q"
+      },
+      "advanceButton": {
+        "_$ref": "ddn3jo0t"
+      },
+      "defaultStation": "campfire"
+    }
+  ],
+  "_$child": [
+    {
+      "_$id": "oq4zruwo",
+      "_$type": "GImage",
+      "name": "img",
+      "x": 660,
+      "y": 366,
+      "width": 520,
+      "height": 800,
+      "anchorX": 0.5,
+      "anchorY": 0.5,
+      "rotation": 90,
+      "src": "res://2f3f0d78-66f8-4cb0-969a-589aa9e15363",
+      "autoSize": false
+    },
+    {
+      "_$id": "craft_title",
+      "_$type": "Text",
+      "name": "title",
+      "x": 288,
+      "y": 139,
+      "width": 740,
+      "height": 40,
+      "text": "工作间",
+      "fontSize": 28,
+      "color": "#000000",
+      "align": "center",
+      "leading": 2,
+      "letterSpacing": 0
+    },
+    {
+      "_$id": "craft_detail",
+      "_$type": "GPanel",
+      "name": "detailPanel",
+      "x": 309,
+      "y": 273,
+      "width": 714,
+      "height": 315,
+      "_$child": [
+        {
+          "_$id": "recipe_name",
+          "_$type": "Text",
+          "name": "recipeName",
+          "x": 169,
+          "y": 18,
+          "width": 135,
+          "height": 35,
+          "text": "请选择配方",
+          "fontSize": 22,
+          "color": "#000000",
+          "leading": 2,
+          "letterSpacing": 0
+        },
+        {
+          "_$id": "recipe_inputs",
+          "_$type": "Text",
+          "name": "inputsText",
+          "x": 169,
+          "y": 73,
+          "width": 60,
+          "height": 28,
+          "text": "材料：",
+          "fontSize": 18,
+          "color": "#000000",
+          "leading": 2,
+          "letterSpacing": 0
+        },
+        {
+          "_$id": "recipe_output",
+          "_$type": "Text",
+          "name": "outputText",
+          "x": 169,
+          "y": 213,
+          "width": 56,
+          "height": 24,
+          "text": "产物：",
+          "fontSize": 18,
+          "color": "#000000",
+          "leading": 2,
+          "letterSpacing": 0
+        },
+        {
+          "_$id": "4onm4ehh",
+          "_$type": "GList",
+          "name": "inputlist",
+          "x": 180,
+          "y": 98,
+          "width": 322,
+          "height": 105,
+          "background": {
+            "_$type": "DrawRoundRectCmd",
+            "lt": 10,
+            "rt": 10,
+            "lb": 10,
+            "rb": 10,
+            "lineWidth": 3,
+            "lineColor": "#000000",
+            "fillColor": "#4f4f0d"
+          },
+          "layout": {
+            "type": 2
+          },
+          "scroller": {
+            "_$type": "Scroller",
+            "direction": 1,
+            "barDisplay": 5
+          },
+          "_templateNode": {
+            "_$ref": "idgzd0bl",
+            "_$tmpl": "itemTemplate"
+          },
+          "_initItemNum": 3,
+          "_$child": [
+            {
+              "_$id": "idgzd0bl",
+              "_$prefab": "a7a8c4f4-7ee8-4b25-ae02-f70166546db5",
+              "name": "input",
+              "active": true,
+              "x": 0,
+              "y": 0,
+              "visible": true
+            }
+          ]
+        },
+        {
+          "_$id": "xkxigm18",
+          "_$prefab": "a7a8c4f4-7ee8-4b25-ae02-f70166546db5",
+          "name": "outputbox",
+          "active": true,
+          "x": 225,
+          "y": 204,
+          "width": 100,
+          "height": 100,
+          "visible": true
+        },
+        {
+          "_$id": "57r39bvn",
+          "_$type": "GList",
+          "name": "list",
+          "x": 22,
+          "y": 2,
+          "width": 129,
+          "height": 317,
+          "layout": {
+            "type": 1
+          },
+          "scroller": {
+            "_$type": "Scroller"
+          },
+          "_templateNode": {
+            "_$ref": "vit4s7np",
+            "_$tmpl": "itemTemplate"
+          },
+          "_initItemNum": 8,
+          "_$child": [
+            {
+              "_$id": "vit4s7np",
+              "_$type": "GWidget",
+              "name": "buttonmodule_2",
+              "width": 100,
+              "height": 100,
+              "_$comp": [
+                {
+                  "_$type": "59e2b6ba-d181-4c83-846e-b77f759d0755",
+                  "scriptPath": "../src/PlayUI/Crafting/CraftingRecipeItem.ts",
+                  "nameText": {
+                    "_$ref": "tz6yo96j"
+                  },
+                  "maskNode": null
+                }
+              ],
+              "_$child": [
+                {
+                  "_$id": "krgsvuwv",
+                  "_$type": "GImage",
+                  "name": "img",
+                  "x": -24,
+                  "y": 1,
+                  "width": 150,
+                  "height": 100,
+                  "src": "res://f583951a-2644-41fe-af88-d3b6855baf4d",
+                  "autoSize": false
+                },
+                {
+                  "_$id": "tz6yo96j",
+                  "_$type": "Text",
+                  "name": "Text",
+                  "width": 100,
+                  "height": 100,
+                  "text": "Text",
+                  "fontSize": 20,
+                  "color": "#000000",
+                  "align": "center",
+                  "valign": "middle",
+                  "leading": 2,
+                  "letterSpacing": 0
+                },
+                {
+                  "_$id": "c091yt8m",
+                  "_$type": "Sprite",
+                  "name": "mask",
+                  "x": 10,
+                  "y": 10,
+                  "width": 100,
+                  "height": 100,
+                  "scaleX": 0.8,
+                  "scaleY": 0.8,
+                  "alpha": 0.5,
+                  "_gcmds": [
+                    {
+                      "_$type": "DrawRoundRectCmd",
+                      "lt": 10,
+                      "rt": 10,
+                      "lb": 10,
+                      "rb": 10,
+                      "fillColor": "#000000"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_$id": "4kp5m8dv",
+          "_$prefab": "bd58ee71-7841-47e3-8f9f-4989d03732bb",
+          "name": "buttonmodule",
+          "active": true,
+          "x": 549,
+          "y": 255,
+          "scaleX": 1.5,
+          "scaleY": 1.5,
+          "visible": true,
+          "_$child": [
+            {
+              "_$override": "fqr4xd66",
+              "text": "制作"
+            }
+          ]
+        },
+        {
+          "_$id": "pq3lac4l",
+          "_$type": "Text",
+          "name": "shuxing",
+          "x": 523,
+          "y": 24,
+          "width": 163,
+          "height": 215,
+          "text": "",
+          "fontSize": 30,
+          "color": "#FFFFFF",
+          "leading": 2,
+          "letterSpacing": 0
+        }
+      ]
+    },
+    {
+      "_$id": "wn2b0lcp",
+      "_$type": "GPanel",
+      "name": "panel",
+      "x": 280,
+      "y": 159,
+      "width": 963,
+      "height": 581,
+      "_$child": [
+        {
+          "_$id": "5dkdmbeh",
+          "_$type": "GWidget",
+          "name": "campfire",
+          "x": 22,
+          "y": 10,
+          "width": 100,
+          "height": 100,
+          "_$child": [
+            {
+              "_$id": "krgsvuwv",
+              "_$type": "GImage",
+              "name": "img",
+              "x": -24,
+              "y": 1,
+              "width": 150,
+              "height": 100,
+              "src": "res://f583951a-2644-41fe-af88-d3b6855baf4d"
+            },
+            {
+              "_$id": "tz6yo96j",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 100,
+              "height": 100,
+              "text": "篝火",
+              "fontSize": 20,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2,
+              "letterSpacing": 0
+            },
+            {
+              "_$id": "5rp622r9",
+              "_$type": "Sprite",
+              "name": "mask",
+              "x": 10,
+              "y": 10,
+              "width": 80,
+              "height": 80,
+              "visible": false,
+              "alpha": 0.5,
+              "_gcmds": [
+                {
+                  "_$type": "DrawRoundRectCmd",
+                  "lt": 10,
+                  "rt": 10,
+                  "lb": 10,
+                  "rb": 10,
+                  "fillColor": "#000000"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_$id": "d1llbzpk",
+          "_$type": "GWidget",
+          "name": "armor",
+          "x": 118,
+          "y": 10,
+          "width": 100,
+          "height": 100,
+          "_$child": [
+            {
+              "_$id": "krgsvuwv",
+              "_$type": "GImage",
+              "name": "img",
+              "x": -24,
+              "y": 1,
+              "width": 150,
+              "height": 100,
+              "src": "res://f583951a-2644-41fe-af88-d3b6855baf4d"
+            },
+            {
+              "_$id": "tz6yo96j",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 100,
+              "height": 100,
+              "text": "防具台",
+              "fontSize": 20,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2,
+              "letterSpacing": 0
+            },
+            {
+              "_$id": "5hv2miwu",
+              "_$type": "Sprite",
+              "name": "mask",
+              "x": 10,
+              "y": 10,
+              "width": 80,
+              "height": 80,
+              "alpha": 0.5,
+              "_gcmds": [
+                {
+                  "_$type": "DrawRoundRectCmd",
+                  "lt": 10,
+                  "rt": 10,
+                  "lb": 10,
+                  "rb": 10,
+                  "fillColor": "#000000"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_$id": "okl86u3m",
+          "_$type": "GWidget",
+          "name": "processing",
+          "x": 216,
+          "y": 11,
+          "width": 100,
+          "height": 100,
+          "_$child": [
+            {
+              "_$id": "krgsvuwv",
+              "_$type": "GImage",
+              "name": "img",
+              "x": -24,
+              "y": 1,
+              "width": 150,
+              "height": 100,
+              "src": "res://f583951a-2644-41fe-af88-d3b6855baf4d"
+            },
+            {
+              "_$id": "tz6yo96j",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 100,
+              "height": 100,
+              "text": "加工台",
+              "fontSize": 20,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2,
+              "letterSpacing": 0
+            },
+            {
+              "_$id": "fvmojnoj",
+              "_$type": "Sprite",
+              "name": "mask",
+              "x": 10,
+              "y": 10,
+              "width": 80,
+              "height": 80,
+              "alpha": 0.5,
+              "_gcmds": [
+                {
+                  "_$type": "DrawRoundRectCmd",
+                  "lt": 10,
+                  "rt": 10,
+                  "lb": 10,
+                  "rb": 10,
+                  "fillColor": "#000000"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_$id": "w9imh9rs",
+          "_$type": "GWidget",
+          "name": "weapon",
+          "x": 313,
+          "y": 11,
+          "width": 100,
+          "height": 100,
+          "_$child": [
+            {
+              "_$id": "krgsvuwv",
+              "_$type": "GImage",
+              "name": "img",
+              "x": -24,
+              "y": 1,
+              "width": 150,
+              "height": 100,
+              "src": "res://f583951a-2644-41fe-af88-d3b6855baf4d"
+            },
+            {
+              "_$id": "tz6yo96j",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 100,
+              "height": 100,
+              "text": "武器台",
+              "fontSize": 20,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2,
+              "letterSpacing": 0
+            },
+            {
+              "_$id": "89q2jee2",
+              "_$type": "Sprite",
+              "name": "mask",
+              "x": 10,
+              "y": 10,
+              "width": 80,
+              "height": 80,
+              "alpha": 0.5,
+              "_gcmds": [
+                {
+                  "_$type": "DrawRoundRectCmd",
+                  "lt": 10,
+                  "rt": 10,
+                  "lb": 10,
+                  "rb": 10,
+                  "fillColor": "#000000"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_$id": "2ifxqi9q",
+          "_$type": "GWidget",
+          "name": "medicine",
+          "x": 509,
+          "y": 12,
+          "width": 100,
+          "height": 100,
+          "_$child": [
+            {
+              "_$id": "krgsvuwv",
+              "_$type": "GImage",
+              "name": "img",
+              "x": -24,
+              "y": 1,
+              "width": 150,
+              "height": 100,
+              "src": "res://f583951a-2644-41fe-af88-d3b6855baf4d"
+            },
+            {
+              "_$id": "tz6yo96j",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 100,
+              "height": 100,
+              "text": "实验台",
+              "fontSize": 20,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2,
+              "letterSpacing": 0
+            },
+            {
+              "_$id": "cyhhdgt4",
+              "_$type": "Sprite",
+              "name": "mask",
+              "x": 10,
+              "y": 10,
+              "width": 80,
+              "height": 80,
+              "alpha": 0.5,
+              "_gcmds": [
+                {
+                  "_$type": "DrawRoundRectCmd",
+                  "lt": 10,
+                  "rt": 10,
+                  "lb": 10,
+                  "rb": 10,
+                  "fillColor": "#000000"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_$id": "deyul414",
+          "_$type": "GWidget",
+          "name": "gunmaking",
+          "x": 411,
+          "y": 13,
+          "width": 100,
+          "height": 100,
+          "_$child": [
+            {
+              "_$id": "krgsvuwv",
+              "_$type": "GImage",
+              "name": "img",
+              "x": -24,
+              "y": 1,
+              "width": 150,
+              "height": 100,
+              "src": "res://f583951a-2644-41fe-af88-d3b6855baf4d"
+            },
+            {
+              "_$id": "tz6yo96j",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 100,
+              "height": 100,
+              "text": "枪械台",
+              "fontSize": 20,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2,
+              "letterSpacing": 0
+            },
+            {
+              "_$id": "tvd9j77o",
+              "_$type": "Sprite",
+              "name": "mask",
+              "x": 10,
+              "y": 10,
+              "width": 80,
+              "height": 80,
+              "alpha": 0.5,
+              "_gcmds": [
+                {
+                  "_$type": "DrawRoundRectCmd",
+                  "lt": 10,
+                  "rt": 10,
+                  "lb": 10,
+                  "rb": 10,
+                  "fillColor": "#000000"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_$id": "ddn3jo0t",
+          "_$type": "GWidget",
+          "name": "advance",
+          "x": 607,
+          "y": 12,
+          "width": 100,
+          "height": 100,
+          "_$child": [
+            {
+              "_$id": "krgsvuwv",
+              "_$type": "GImage",
+              "name": "img",
+              "x": -24,
+              "y": 1,
+              "width": 150,
+              "height": 100,
+              "src": "res://f583951a-2644-41fe-af88-d3b6855baf4d"
+            },
+            {
+              "_$id": "tz6yo96j",
+              "_$type": "Text",
+              "name": "Text",
+              "width": 100,
+              "height": 100,
+              "text": "高级台",
+              "fontSize": 20,
+              "color": "#000000",
+              "align": "center",
+              "valign": "middle",
+              "leading": 2,
+              "letterSpacing": 0
+            },
+            {
+              "_$id": "4ojhguvu",
+              "_$type": "Sprite",
+              "name": "mask",
+              "x": 10,
+              "y": 10,
+              "width": 80,
+              "height": 80,
+              "alpha": 0.5,
+              "_gcmds": [
+                {
+                  "_$type": "DrawRoundRectCmd",
+                  "lt": 10,
+                  "rt": 10,
+                  "lb": 10,
+                  "rb": 10,
+                  "fillColor": "#000000"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_$id": "joiii0ex",
+      "_$type": "GWidget",
+      "name": "CloseSprite",
+      "x": 963,
+      "y": 139,
+      "width": 100,
+      "height": 100,
+      "_$comp": [
+        {
+          "_$type": "14d09e1b-aa6f-4bcf-afc1-cf0226a43024",
+          "scriptPath": "../src/CloseSprite.ts",
+          "targetNode": {
+            "_$ref": "89w7gnf0"
+          }
+        }
+      ],
+      "_$child": [
+        {
+          "_$id": "rfkfthtc",
+          "_$type": "GImage",
+          "name": "img",
+          "x": -2,
+          "y": -35,
+          "width": 100,
+          "height": 100,
+          "src": "res://2f8dc7c5-4a24-4efd-8e48-9772db215c5c",
+          "autoSize": false
+        }
+      ]
+    }
+  ]
+}

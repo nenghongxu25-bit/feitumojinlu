@@ -1,9 +1,0 @@
-{
-  "_$type": "TileSet",
-  "tileSize": {
-    "_$type": "Vector2",
-    "x": 32,
-    "y": 32
-  },
-  "groups": []
-}
